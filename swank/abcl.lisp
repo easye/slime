@@ -473,11 +473,11 @@
     (backtrace start end)))
 
 ;; Don't count on JSS being loaded, but if it is then there's some more stuff we can do
-+#+#.(swank/backend:with-symbol 'invoke-restargs 'jss)
+#+#.(swank/backend:with-symbol 'invoke-restargs 'jss)
 (defun jss-p ()
   (and (member "JSS" *modules* :test 'string=) (intern "INVOKE-RESTARGS" "JSS")))
 
-+#+#.(swank/backend:with-symbol 'invoke-restargs 'jss)
+#+#.(swank/backend:with-symbol 'invoke-restargs 'jss)
 (defun matches-jss-call (form)
   (flet ((gensymp (s) (and (symbolp s) (null (symbol-package s))))
          (invokep (s)  (and (symbolp s) (eq s (jss-p)))))
@@ -1364,6 +1364,7 @@
               append
               `("  " (:label ,(string-downcase (string name))) ": " (:value ,value) (:newline))))))
 
+#+#.(swank/backend:with-symbol 'invoke-restargs 'jss)
 (defmethod emacs-inspect ((object sys::structure-class))
   (let* ((name (jss::get-java-field object "name" t))
          (def (get name  'system::structure-definition)))
