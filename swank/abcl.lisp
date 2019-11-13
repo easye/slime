@@ -643,7 +643,9 @@
       (let ((*buffer-name* buffer)
             (*buffer-start-position* position)
             (*buffer-string* string)
-            (sys::*source* (make-pathname :device "emacs-buffer" :name buffer))
+            (sys::*source*
+             (make-pathname :device "emacs-buffer"
+                            :name (substitute #\* #\+ buffer)))
             (sys::*source-position* position))
         (funcall (compile nil (read-from-string
                                (format nil "(~S () ~A)" 'lambda string))))
