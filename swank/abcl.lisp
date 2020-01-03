@@ -257,7 +257,7 @@
           do (java:jstatic (java:jmethod "java.lang.reflect.Array"  "setByte"
                                          "java.lang.Object" "int" "byte")
                            "java.lang.reflect.Array"
-                           bytes i byte))
+                           bytes i (java:jcoerce byte "byte")))
     bytes))
 
 (defun jbytes-to-octets (jbytes)
