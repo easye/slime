@@ -509,7 +509,6 @@ corresponding values in the CDR of VALUE."
 (defmacro with-retry-restart ((&key (msg "Retry.")) &body body)
   (check-type msg string)
   `(call-with-retry-restart ,msg (lambda () ,@body)))
-
 
 (defmacro define-special (name doc)
   "Define a special variable NAME with doc string DOC.
