@@ -518,6 +518,17 @@ See `methods-by-applicability'.")
       `((:newline))
       (all-slots-for-inspector gf))))
 
+(defun disassemble-action(what)
+  (list " " (list :action "[disassemble]"
+	(lambda()
+	  (let ((it (with-output-to-string (s) 
+		      (let ((*standard-output* s))
+			(disassemble what )))))
+	    #+abcl (setq it (#"replaceAll" it "(?m)^; " ""))
+	    (swank::ed-in-emacs `(:string ,it)))))))
+
+(disassemble-action 'foo)("" (:action #<local-function in disassemble-action {23212938}>))a
+
 (defmethod emacs-inspect ((method standard-method))
   `(,@(if (swank-mop:method-generic-function method)
           `((:label "Method defined on the generic function ")
@@ -537,6 +548,7 @@ See `methods-by-applicability'.")
       (:label "Qualifiers: ") (:value ,(swank-mop:method-qualifiers method))
       (:newline)
       (:label "Method function: ") (:value ,(swank-mop:method-function method))
+      ,@(disassemble-action (swank-mop:method-function method))
       (:newline)
       ,@(all-slots-for-inspector method)))
 

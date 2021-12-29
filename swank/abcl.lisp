@@ -1026,11 +1026,12 @@
 
 #+abcl-introspect
 (defimplementation list-callers (thing)
+  (remove-duplicates
   (loop for caller in (sys::callers thing)
         when (typep caller 'method)
           append (let ((name (mop:generic-function-name
                               (mop:method-generic-function caller))))
-                   (mapcar (lambda(s) (slime-location-from-source-annotation thing s))
+                   (mapcar (lambda(s) (slime-location-from-source-annotation caller s))
                            (remove `(:method ,@(sys::method-spec-list caller))
                                    (get 
                                     (if (consp name) (second name) name)
@@ -1038,7 +1039,7 @@
                                    :key 'car :test-not 'equalp)))
         when (symbolp caller)
           append   (mapcar (lambda(s) (slime-location-from-source-annotation caller s))
-                           (get caller 'sys::source))))
+                           (get caller 'sys::source))) :test 'equalp))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Inspecting
@@ -1148,7 +1149,9 @@
 (defmethod emacs-inspect ((f function))
   `(,@(when (function-name f)
         `((:label "Name: ")
-          ,(princ-to-string (sys::any-function-name f)) (:newline)))
+          ,(princ-to-string (sys::any-function-name f)) ))
+    ,@(swank::disassemble-action f)
+    (:newline)
       ,@(multiple-value-bind (args present) (sys::arglist f)
           (when present
             `((:label "Argument list: ")
@@ -1181,13 +1184,14 @@
           (when (plusp (length fields))
             (list* '(:label "Internal fields: ") '(:newline)
                    (loop for field across fields
-                      do (jcall "setAccessible" field t) ;;; not a great idea esp. wrt. Java9
+                         for cant-access = (second (multiple-value-list (ignore-errors (jcall "setAccessible" field t))))
+;                      do (jcall "setAccessible" field t) ;;; not a great idea esp. wrt. Java9
                       append
                         (let ((value (jcall "get" field f)))
                           (list "  "
                                 `(:label ,(jcall "getName" field))
                                 ": "
-                                `(:value ,value ,(princ-to-string value))
+                                (if cant-access '(:styled-value :dim :inaccessible) `(:value ,value ,(princ-to-string value)))
                                 '(:newline)))))))
       #+abcl-introspect
       ,@(when (and (function-name f) (symbolp (function-name f))
@@ -1220,13 +1224,14 @@
      for fields
        = (sort (jcall "getDeclaredFields" super) 'string-lessp :key (lambda(x) (jcall "getName" x)))
      for fromline
-       = nil then (list `(:label "From: ") `(:value ,super  ,(jcall "getName" super)) '(:newline))
+       = nil then (list `(:label "From: ") `(:styled-value :blue ,super  ,(jcall "getName" super)) '(:newline))
      when (and (plusp (length fields)) fromline)
      append fromline
      append
        (loop for this across fields
-          for value = (jcall "get" (progn (jcall "setAccessible" this t) this) object)
-          for line = `("  " (:label ,(jcall "getName" this)) ": " (:value ,value) (:newline))
+             for cant-access = (second (multiple-value-list (ignore-errors (jcall "setAccessible" this t))))
+          for value = (unless cant-access (jcall "get" this object))
+          for line = `("  " (:label ,(jcall "getName" this)) ": " ,(if cant-access '(:styled-value :dim :inaccessible) `(:value ,value)) (:newline))
           if (static-field? this)
           append line into statics
           else append line into members
@@ -1281,7 +1286,7 @@
      for fields
        = (jcall "getDeclaredFields" super)
      for fromline
-       = nil then (list `(:label "From: ") `(:value ,super  ,(jcall "getName" super)) '(:newline))
+       = nil then (list `(:label "From: ") `(:styled-value :blue ,super  ,(jcall "getName" super)) '(:newline))
      when (and (plusp (length fields)) fromline)
      append fromline
      append
@@ -1291,7 +1296,7 @@
                             (1+ (position #\. (jcall "toString" this)  :from-end t)))
           collect "  "
           collect (list :value this pre)
-          collect (list :strong-value this (jcall "getName" this) )
+          collect (list :styled-value :blue this (jcall "getName" this) )
           collect '(:newline))))
 
 (defun inspector-java-methods (class)
@@ -1302,7 +1307,7 @@
      for methods
        = (jcall "getDeclaredMethods" super)
      for fromline
-       = nil then (list `(:label "From: ") `(:value ,super  ,(jcall "getName" super)) '(:newline))
+       = nil then (list `(:label "From: ") `(:styled-value :blue ,super  ,(jcall "getName" super)) '(:newline))
      when (and (plusp (length methods)) fromline)
      append fromline
      append
@@ -1315,7 +1320,7 @@
           for after = (subseq desc paren)
           collect "  "
           collect (list :value this pre)
-          collect (list :strong-value this name)
+          collect (list :styled-value :blue this name)
           collect (list :value this after)
           collect '(:newline))))
 
@@ -1323,14 +1328,14 @@
   (let ((has-superclasses (jclass-superclass class))
         (has-interfaces (plusp (length (jclass-interfaces class))))
         (fields (inspector-java-fields class))
-        (path (jcall "replaceFirst"
+        (path (ignore-errors (jcall "replaceFirst"
                      (jcall "replaceFirst"  
                             (jcall "toString" (jcall "getResource" 
                                                      class
                                                      (concatenate 'string
                                                                   "/" (substitute #\/ #\. (jcall "getName" class))
                                                                   ".class")))
-                            "jar:file:" "") "!.*" "")))
+                            "jar:file:" "") "!.*" ""))))
     `((:label ,(format nil "Java Class: ~a" (jcall "getName" class) ))
       (:newline)
       ,@(when path (list `(:label ,"Loaded from: ")

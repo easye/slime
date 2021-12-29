@@ -141,6 +141,13 @@ CONTRIBS is a list of contrib packages to load. If `nil', use
 (defvar slime-protocol-version nil)
 (setq slime-protocol-version slime-version)
 
+(defvar slime-value-faces '(:blue 
+                            (t (:inherit slime-inspector-label-face :foreground "blue"))
+                            :dim
+                            (t (:inherit slime-inspector-label-face :foreground "grey")))
+  "A plist whose values are a faces and keys able to be used in (:styled-value <key> <value> <label>) parts
+e.g. '(:blue (t (:inherit slime-inspector-label-face :foreground \"blue\")))")
+
 
 ;;;; Customize groups
 ;;
@@ -6359,11 +6366,6 @@ was called originally."
   "Face for labels in the inspector."
   :group 'slime-inspector)
 
-(defface slime-inspector-strong-face
-  '((t (:inherit slime-inspector-label-face)))
-  "Face for parts of values that are emphasized in the inspector."
-  :group 'slime-inspector)
-
 (defface slime-inspector-value-face
     '((t (:inherit font-lock-builtin-face)))
   "Face for things which can themselves be inspected."
@@ -6470,12 +6472,10 @@ If PREV resp. NEXT are true insert more-buttons as needed."
                  'mouse-face 'highlight
                  'face 'slime-inspector-value-face)
          (insert string)))
-      ((:strong-value string id )
-       (slime-propertize-region
-           (list 'slime-part-number id
-                 'mouse-face 'highlight
-                 'face 'slime-inspector-strong-face)
-         (insert string)))
+      ((:styled-value style  string id )
+       (let ((face (or (getf slime-value-faces style) 'slime-inspector-value-face)))
+         (slime-insert-propertized `(slime-part-number ,id mouse-face highlight face ,face)
+           string)))
       ((:label string)
        (insert (slime-inspector-fontify label string)))
       ((:action string id)
