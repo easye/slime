@@ -194,13 +194,15 @@
 
 (defun inspect-function (f)
   (append
-   (list '(:label "Name:") (function-name f) '(:newline))
-   `((:label "Argument list: ")
-     ,(inspector-princ (arglist f)) (:newline))
-   (docstring-ispec "Documentation" f t)
-   (if (function-lambda-expression f)
-       (label-value-line "Lambda Expression"
-			 (function-lambda-expression f)))))
+   (list '(:label "Name:") (function-name f))
+   (disassemble-action f)
+   '((:newline)))
+  `((:label "Argument list: ")
+    ,(inspector-princ (arglist f)) (:newline))
+  (docstring-ispec "Documentation" f t)
+  (if (function-lambda-expression f)
+      (label-value-line "Lambda Expression"
+			(function-lambda-expression f))))
 
 (defun method-specializers-for-inspect (method)
   "Return a \"pretty\" list of the method's specializers. Normal
@@ -524,10 +526,8 @@ See `methods-by-applicability'.")
 	  (let ((it (with-output-to-string (s) 
 		      (let ((*standard-output* s))
 			(disassemble what )))))
-	    #+abcl (setq it (#"replaceAll" it "(?m)^; " ""))
+	    #+abcl (setq it (java::jcall "replaceAll" it "(?m)^; " ""))
 	    (swank::ed-in-emacs `(:string ,it)))))))
-
-(disassemble-action 'foo)("" (:action #<local-function in disassemble-action {23212938}>))a
 
 (defmethod emacs-inspect ((method standard-method))
   `(,@(if (swank-mop:method-generic-function method)
