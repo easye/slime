@@ -678,6 +678,9 @@ concise string representation of what each symbol
 represents (see SYMBOL-CLASSIFICATION-STRING)"
   (let ((max-length (loop for s in symbols
                           maximizing (length (symbol-name s))))
+	(max-package-length
+	  (loop for s in symbols
+                          maximizing (length (and (symbol-package s) (package-name (symbol-package s))))))
         (distance 10)) ; empty distance between name and classification
     (flet ((string-representations (symbol)
              (let* ((name (symbol-name symbol))
@@ -692,18 +695,24 @@ represents (see SYMBOL-CLASSIFICATION-STRING)"
       `(""                           ; 8 is (length "Symbols:")
         "Symbols:" ,(make-string (+ -8 max-length distance)
                                  :initial-element #\Space)
-        "Flags:"
+        "Flags:   Package:"
         (:newline)
         ,(concatenate 'string        ; underlining dashes
                       (make-string (+ max-length distance -1)
                                    :initial-element #\-)
                       " "
-                      (symbol-classification-string '#:foo))
+                      (symbol-classification-string '#:foo)
+                      " "
+		      (make-string (max 8 (+ max-package-length))
+				   :initial-element #\-)
+
+		      )
         (:newline)
         ,@(loop for symbol in symbols appending
                (multiple-value-bind (symbol-string classification-string)
                    (string-representations symbol)
-                 `((:value ,symbol ,symbol-string) ,classification-string
+                 `((:value ,symbol ,symbol-string) ,classification-string " " 
+		   (:value ,(symbol-package symbol) ,(and (symbol-package symbol) (string-downcase (package-name (symbol-package symbol)))))
                    (:newline)
                    )))))))
 
@@ -794,18 +803,24 @@ SPECIAL-OPERATOR groups."
         (present-symbols      '()) (present-symbols-length   0)
         (internal-symbols     '()) (internal-symbols-length  0)
         (inherited-symbols    '()) (inherited-symbols-length 0)
-        (external-symbols     '()) (external-symbols-length  0))
+        (external-symbols     '()) (external-symbols-length  0)
+        (imported-symbols     '()) (imported-symbols-length  0))
 
     (do-symbols* (sym package)
       (let ((status (symbol-status sym package)))
         (when (eq status :inherited)
           (push sym inherited-symbols) (incf inherited-symbols-length)
           (go :continue))
-        (push sym present-symbols) (incf present-symbols-length)
+        (push sym present-symbols) 
+	(incf present-symbols-length)
         (cond ((eq status :internal)
-               (push sym internal-symbols) (incf internal-symbols-length))
-              (t
-               (push sym external-symbols) (incf external-symbols-length))))
+               (push sym internal-symbols)
+	       (incf internal-symbols-length)
+	       (when (not (eq (symbol-package sym) package))
+		 (push sym imported-symbols) (incf imported-symbols-length)))
+              ((eq status :external)
+               (push sym external-symbols) (incf external-symbols-length))
+	      (t (error "Status: ~a is not :internal :inherited or :exported" status))))
       :continue)
 
     (setf package-nicknames    (sort (copy-list package-nicknames)
@@ -817,18 +832,28 @@ SPECIAL-OPERATOR groups."
           shadowed-symbols     (sort (copy-list shadowed-symbols)
                                      #'string<))
 ;;; SORT + STRING-LESSP conses on at least SBCL 0.9.18.
-    (setf present-symbols      (sort present-symbols  #'string<)
-          internal-symbols     (sort internal-symbols #'string<)
-          external-symbols     (sort external-symbols #'string<)
-          inherited-symbols    (sort inherited-symbols #'string<))
+    (flet ((sort-comparison (a b)
+	     (if (eq (symbol-package a) (symbol-package b))
+		 (string< a b)
+		 (cond ((eq (symbol-package a) package)
+		       nil)
+		       ((eq (symbol-package b) package)
+			t)
+		       (t
+			(string< (package-name (symbol-package a)) (package-name (symbol-package b))))))))
+      (setf present-symbols      (sort present-symbols  #'sort-comparison)
+	    internal-symbols     (sort internal-symbols #'sort-comparison)
+	    external-symbols     (sort external-symbols #'sort-comparison)
+	    inherited-symbols    (sort inherited-symbols #'sort-comparison)
+	    imported-symbols     (sort imported-symbols #'sort-comparison)))
     `("" ;; dummy to preserve indentation.
       (:label "Name: ") (:value ,package-name) (:newline)
 
       ,@(when package-nicknames
-	  `((:label "Nicknames: ") (value ,@(comma-separated-spec package-nicknames)) (:newline)))
+	  `((:label "Nicknames: ")  ,@(comma-separated-spec package-nicknames) (:newline)))
 
       ,@(when package-local-nicknames
-          `((:lable "Package-local nicknames: ") (:value ,@(comma-separated-spec package-local-nicknames)) (:newline)))
+          `((:label "Package-local nicknames: ") ,@(comma-separated-spec package-local-nicknames) (:newline)))
 
       ,@(when (documentation package t)
           `((:label "Documentation:") (:newline)
@@ -858,7 +883,9 @@ SPECIAL-OPERATOR groups."
                        "being inherited from another package.\""
                        (:newline)
                        "(CLHS glossary entry for `present')"
-                       (:newline)))
+                       (:newline)
+		       "Flags: [b]oundp [f]boundp [g]eneric-function [c]lass [m]acro [s]pecial-operator [p]ackage]"
+		       (:newline)))
 
       (:newline)
       ,(display-link "external" external-symbols external-symbols-length
@@ -873,7 +900,9 @@ SPECIAL-OPERATOR groups."
                        "[is] inherited by any other package that uses the"
                        (:newline)
                        "package.\" (CLHS glossary entry of `external')"
-                       (:newline)))
+                       (:newline)
+		       "Flags: [b]oundp [f]boundp [g]eneric-function [c]lass [m]acro [s]pecial-operator [p]ackage]"
+		       (:newline)))
       (:newline)
       ,(display-link "internal" internal-symbols internal-symbols-length
                      :title
@@ -896,7 +925,10 @@ SPECIAL-OPERATOR groups."
                        "entry of `internal' because it's assumed to be more"
                        (:newline)
                        "useful this way."
+		       (:newline)
+		       "Flags: [b]oundp [f]boundp [g]eneric-function [c]lass [m]acro [s]pecial-operator [p]ackage]"
                        (:newline)))
+
       (:newline)
       ,(display-link "inherited" inherited-symbols  inherited-symbols-length
                      :title
@@ -906,13 +938,25 @@ SPECIAL-OPERATOR groups."
                      '("A symbol is considered inherited in a package if it"
                        (:newline)
                        "was made accessible via USE-PACKAGE."
+		       (:newline)
+		       "Flags: [b]oundp [f]boundp [g]eneric-function [c]lass [m]acro [s]pecial-operator [p]ackage]"
                        (:newline)))
+      (:newline)
+      ,(display-link "imported internal" imported-symbols  (length imported-symbols)
+                     :title
+                     (format nil "All imported, but not exported, symbols of package \"~A\""
+                             package-name)
+                     :description
+		     '("Flags: [b]oundp [f]boundp [g]eneric-function [c]lass [m]acro [s]pecial-operator [p]ackage]"
+		       (:newline)))
       (:newline)
       ,(display-link "shadowed" shadowed-symbols (length shadowed-symbols)
                      :title
                      (format nil "All shadowed symbols of package \"~A\""
                              package-name)
-                     :description nil))))
+                     :description
+		     '("Flags: [b]oundp [f]boundp [g]eneric-function [c]lass [m]acro [s]pecial-operator [p]ackage]"
+		       (:newline))))))
 
 
 (defmethod emacs-inspect ((pathname pathname))
