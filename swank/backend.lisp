@@ -1555,7 +1555,10 @@ Implementations intercept calls to SPEC and call, in this order:
                                                  retlist
                                                  :exited-non-locally))))))))
     (setf (get spec 'slime-wrap) (list saved replacement))
-    (setf (symbol-function spec) replacement))
+    (setf (symbol-function spec) replacement)
+    #+abcl
+    (sys::record-source-information-for-type spec `(:swank-wrap ,spec))
+    )
   spec)
 
 (definterface unwrap (spec indicator)
