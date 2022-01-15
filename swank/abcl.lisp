@@ -1136,6 +1136,26 @@
                         (jcall "printStackTrace" (java:java-exception-cause o) (jnew "java.io.PrintWriter" w))
                         (jcall "toString" w)))))
 
+
+
+(defmethod emacs-inspect ((o system::environment))
+  (let ((parts (sys::environment-parts o)))
+    (let ((lexicals (mapcar 'cdr (remove :lexical parts :test-not 'eq :key 'car)))
+	  (specials (mapcar 'cdr (remove :special parts :test-not 'eq :key 'car)))
+	  (functions (mapcar 'cdr (remove :function parts :test-not 'eq :key 'car))))
+       `(,@(if lexicals  
+	       (list* '(:label "Lexicals:") '(:newline) 
+		      (loop for (var value) in lexicals 
+			    append `("  " (:label ,(format nil "~s" var)) ": " (:value ,value) (:newline)))))
+	 ,@(if functions  
+	       (list* '(:label "Functions:") '(:newline)
+		      (loop for (var value) in functions 
+			    append `("  "(:label ,(format nil "~s" var)) ": " (:value ,value) (:newline)))))
+	 ,@(if specials  
+	       (list* '(:label "Specials:") '(:newline) 
+		      (loop for (var value) in specials 
+			    append `("  " (:label ,(format nil "~s" var)) ": " (:value ,value) (:newline)))))))))
+
 (defmethod emacs-inspect ((slot mop::slot-definition))
   `("Name: "
     (:value ,(mop:slot-definition-name slot))
