@@ -1079,9 +1079,15 @@
                              (list :label (string-capitalize label))
                              ": "
                              (list :value value (princ-to-string value)) '(:newline)))
-              (list '(:label "No inspectable parts, dumping output of CL:DESCRIBE:")
+              (list* '(:label "No inspectable parts, dumping output of CL:DESCRIBE:")
                     '(:newline)
-                    (with-output-to-string (desc) (describe o desc))))))))
+                    (with-output-to-string (desc) (describe o desc))
+                    '(:label "--------------")
+                    '(:newline)
+                    '(:label "As JAVA object") 
+                    '(:newline)
+                    (emacs-inspect-java-object o)
+                    ))))))
 
 (defmethod emacs-inspect ((string string))
   (swank::lcons* 
@@ -1324,6 +1330,19 @@
           collect (list :value this after)
           collect '(:newline))))
 
+(defun inspector-java-constructors (class)
+  (loop
+    for this across (jcall "getConstructors" class)
+    for desc = (jcall "toString" this)
+    for paren =  (position #\( desc)
+    for dot = (position #\. (subseq desc 0 paren) :from-end t)
+    for name = (subseq desc (1+ dot) paren)
+    for after = (subseq desc paren)
+    collect "  "
+    collect (list :styled-value :blue this name)
+    collect (list :value this after)
+    collect '(:newline)))
+
 (defun emacs-inspect-java-class (class)
   (let ((has-superclasses (jclass-superclass class))
         (has-interfaces (plusp (length (jclass-interfaces class))))
@@ -1348,7 +1367,10 @@
       ,@(if has-interfaces
             (list* '(:newline) '(:label "Implements Interfaces: ")
                    (butlast (loop for i across (jclass-interfaces class) collect (list :value i (jcall "getName" i)) collect ", "))))
-      (:newline) (:label "Methods:") (:newline)
+      (:newline)
+      (:label "Constructors:") (:newline)
+      ,@(inspector-java-constructors class)
+      (:label "Methods:") (:newline)
       ,@(inspector-java-methods class)
       ,@(if fields
             (list*
@@ -1358,7 +1380,14 @@
 (defmethod emacs-inspect ((object sys::structure-object))
   `((:label "Type: ") (:value ,(type-of object)) (:newline)
     (:label "Class: ") (:value ,(class-of object)) (:newline)
-    ,@(inspector-structure-slot-names-and-values object)))
+    ,@(inspector-structure-slot-names-and-values object)
+    ,@(funcall (mop::method-function
+                (car
+                 (compute-applicable-methods #'swank::emacs-inspect (list java::+null+))
+                 ))
+               (list object)
+               (lambda(&rest args) (declare (ignore args))))
+    ))
 
 (defun inspector-structure-slot-names-and-values (structure)
   (let ((structure-def (get (type-of structure) 'system::structure-definition)))
