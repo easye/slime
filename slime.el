@@ -4012,9 +4012,9 @@ This is for use in the implementation of COMMON-LISP:ED."
                       position))))
       ((:function-name name)
        (slime-edit-definition name))
-      ((:string string)
-       (with-output-to-temp-buffer "*edit-string*"
-         (switch-to-buffer "*edit-string*")
+      ((:string string &optional buffer-name)
+       (with-output-to-temp-buffer (or buffer-name "*edit-string*")
+         (switch-to-buffer (or buffer-name "*edit-string*"))
          (princ string)
          (fundamental-mode)
          (setq buffer-read-only nil))))))

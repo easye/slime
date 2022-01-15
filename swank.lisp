@@ -1982,6 +1982,8 @@ WHAT can be:
              (null nil)
               ((cons (eql :string) (cons string))
                what)
+              ((cons (eql :string) (cons string (cons string)))
+               what)
              ((or string pathname) 
               `(:filename ,(canonicalize-filename what)))
              ((cons (or string pathname) *)
