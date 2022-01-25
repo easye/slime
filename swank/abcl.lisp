@@ -855,15 +855,17 @@
 
 (defvar *source-path*
   (remove nil 
-          (append (search-path-property "user.dir")
-                  (jdk-source-path)
-                  ;; include lib jar files. contrib has lisp code. Would be good to build abcl.jar with source code as well
-                  #+abcl-introspect
-                  (list (sys::find-system-jar)
-                        (sys::find-contrib-jar))))
-                  ;; you should tell slime where the abcl sources are. In .swank.lisp I have:
-                  ;; (push (probe-file "/Users/alanr/repos/abcl/src/") *SOURCE-PATH*)
-"List of directories to search for source files.")
+          (append 
+           (list (get :swank-abcl-source-path :path)) ;; so this can be set in .abclrc, before *source-path* exists
+           (search-path-property "user.dir")
+           (jdk-source-path)
+           ;; include lib jar files. contrib has lisp code. Would be good to build abcl.jar with source code as well
+           #+abcl-introspect
+           (list (sys::find-system-jar)
+                 (sys::find-contrib-jar))))
+  ;; you should tell slime where the abcl sources are. In .swank.lisp I have:
+  ;; (push (probe-file "/Users/alanr/repos/abcl/src/") *SOURCE-PATH*)
+  "List of directories to search for source files.")
 
 (defun zipfile-contains-p (zipfile-name entry-name)
   (let ((zipfile (jnew (jconstructor "java.util.zip.ZipFile"
@@ -879,7 +881,9 @@
   (labels ((try (dir)
              (cond ((not (pathname-type dir))
                     (let ((f (probe-file (merge-pathnames filename dir))))
-                      (and f `(:file ,(namestring f)))))
+                      (if (and f (ext:pathname-jar-p f))
+                          `(:zip ,@(split-string (subseq (namestring f) (length "jar:file:")) "!/"))
+                          (and f `(:file ,(namestring f))))))                   
                    ((member (pathname-type dir) '("zip" "jar") :test 'equal)
                     (try-zip dir))
                    (t (error "strange path element: ~s" path))))
