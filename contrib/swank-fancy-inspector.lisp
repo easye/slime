@@ -88,13 +88,13 @@
         ;;
         ;; Class
         (if (find-class symbol nil)
-            `("It names the class "
-              (:value ,(find-class symbol) ,(string symbol))
+            `((:label "It names the class") ": "
+              (:value ,(find-class symbol) ,(format nil "~a" symbol))
               " "
               (:action "[remove]"
                        ,(lambda () (setf (find-class symbol) nil)))
               (:newline)))
-        ;;
+
         ;; More package
         (if (find-package symbol)
             (label-value-line "It names the package" (find-package symbol)))
@@ -128,11 +128,11 @@
             when found
             collect
               (let ((specs (butlast specs)))
-                (list* (list :value found (let ((*package* (find-package :keyword))) (format nil "~s" found)))
-                       (if specs ": " "")
+                (list* "  " (list :value found (let ((*package* (find-package :keyword))) (format nil "~s" found)))
+                       (if specs " " "")
                        (append specs '((:newline))))))))
     (if others
-        `("In other packages: " 
+        `((:label "In other packages:") " "
           (:newline)  
           ,@(apply 'append others)))))
 
