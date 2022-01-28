@@ -1177,9 +1177,9 @@
 
 (defmethod emacs-inspect ((o system::environment))
   (let ((parts (sys::environment-parts o)))
-    (let ((lexicals (mapcar 'cdr (remove :lexical parts :test-not 'eq :key 'car)))
+    (let ((lexicals (mapcar 'cdr (remove :lexical-variable parts :test-not 'eq :key 'car)))
 	  (specials (mapcar 'cdr (remove :special parts :test-not 'eq :key 'car)))
-	  (functions (mapcar 'cdr (remove :function parts :test-not 'eq :key 'car))))
+	  (functions (mapcar 'cdr (remove :lexical-function parts :test-not 'eq :key 'car))))
        `(,@(if lexicals  
 	       (list* '(:label "Lexicals:") '(:newline) 
 		      (loop for (var value) in lexicals 
@@ -1392,7 +1392,7 @@
     for this across (jcall "getConstructors" class)
     for desc = (jcall "toString" this)
     for paren =  (position #\( desc)
-    for dot = (position #\. (subseq desc 0 paren) :from-end t)
+    for dot = (or (position #\. (subseq desc 0 paren) :from-end t) (position #\space (subseq desc 0 paren) :from-end t) 0)
     for name = (subseq desc (1+ dot) paren)
     for after = (subseq desc paren)
     collect "  "
