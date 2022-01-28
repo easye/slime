@@ -111,7 +111,7 @@
 (defclass standard-slot-definition ()())
 
 (defun slot-definition-documentation (slot)
-  (declare (ignore slot))
+  (declare (ignorable slot))
   #+abcl-introspect
   (documentation slot 't))
 
@@ -216,6 +216,7 @@
   :spawn)
 
 (defimplementation create-socket (host port &key backlog)
+  (declare (ignore host backlog))
   (ext:make-server-socket port))
 
 (defimplementation local-port (socket)
@@ -364,7 +365,6 @@
 
 (defimplementation collect-macro-forms (form &optional env)
   ;; Currently detects only normal macros, not compiler macros.
-  (declare (ignore env))
   (with-collected-macro-forms (macro-forms)
       (handler-bind ((warning #'muffle-warning))
         (ignore-errors
@@ -517,7 +517,7 @@
                   (format stream "(#~s ~{~s~^~})" (second form) (list* (third  form) (fourth form)))
                   (loop initially  (write-char #\( stream)
                         for (el . rest) on form
-                        for method =  (swank/abcl::matches-jss-call el)
+                        for method =  (matches-jss-call el)
                         do
                            (cond (method 
                                   (format stream "(#~s ~{~s~^~})" method (cdr el)))
