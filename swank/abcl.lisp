@@ -685,10 +685,53 @@
                                (format nil "(~S () ~A)" 'lambda string))))
         t))))
 
+(defun system-property (name)
+  (jstatic "getProperty" "java.lang.System" name))
+
+(defun path-separator ()
+  (jfield "java.io.File" "pathSeparator"))
+
+(defun split-string (string regexp)
+  (coerce
+   (jcall (jmethod "java.lang.String" "split" "java.lang.String")
+               string regexp)
+   'list))
+
+(defun pathname-parent (pathname)
+  (make-pathname :directory (butlast (pathname-directory pathname))))
+
+(defun jdk-source-path ()
+  (let* ((jre-home (truename (system-property "java.home")))
+         (src-zip (merge-pathnames "src.zip" (pathname-parent jre-home)))
+         (truename (probe-file src-zip)))
+    (and truename (list truename))))
+
+
+(defun search-path-property (prop-name)
+  (let ((string (system-property prop-name)))
+    (and string
+         (remove nil
+                 (mapcar #'truename
+                         (split-string string (path-separator)))))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; source location and users of it
 
 (defgeneric source-location (object))
+
+(defvar *source-path*
+  (remove nil 
+          (append 
+           (get :swank-abcl-source-path :path) ;; so this can be set in .abclrc, before *source-path* exists
+           (search-path-property "user.dir")
+           (jdk-source-path)
+           ;; include lib jar files. contrib has lisp code. Would be good to build abcl.jar with source code as well
+           #+abcl-introspect
+           (list (sys::find-system-jar)
+                 (sys::find-contrib-jar))))
+  ;; you should tell slime where the abcl sources are. In .swank.lisp I have:
+  ;; (push (probe-file "/Users/alanr/repos/abcl/src/") *SOURCE-PATH*)
+  "List of directories to search for source files.")
 
 ;; try to find some kind of source for internals
 #+abcl-introspect
@@ -779,7 +822,7 @@
 (defmethod source-location ((symbol symbol))
   (or #+abcl-introspect
       (let ((maybe (if-we-have-to-choose-one-choose-the-function (get symbol 'sys::source))))
-        (and maybe (second (slime-location-from-source-annotation symbol maybe))))
+        (and maybe (second (car (slime-location-from-source-annotation symbol maybe))))) ;; FIXME slime-location-from-source-annotation returns a list now
       ;; This below should be obsolete - it uses the old sys:%source
       ;; leave it here for now just in case
       (and (pathnamep (ext:source-pathname symbol))
@@ -851,54 +894,13 @@
   (let ((name (function-name fun)))
     (and name (source-location name))))
 
-(defun system-property (name)
-  (jstatic "getProperty" "java.lang.System" name))
-
-(defun pathname-parent (pathname)
-  (make-pathname :directory (butlast (pathname-directory pathname))))
 
 (defun pathname-absolute-p (pathname)
   (eq (car (pathname-directory pathname)) ':absolute))
 
-(defun split-string (string regexp)
-  (coerce
-   (jcall (jmethod "java.lang.String" "split" "java.lang.String")
-               string regexp)
-   'list))
-
-(defun path-separator ()
-  (jfield "java.io.File" "pathSeparator"))
-
-(defun search-path-property (prop-name)
-  (let ((string (system-property prop-name)))
-    (and string
-         (remove nil
-                 (mapcar #'truename
-                         (split-string string (path-separator)))))))
-
-(defun jdk-source-path ()
-  (let* ((jre-home (truename (system-property "java.home")))
-         (src-zip (merge-pathnames "src.zip" (pathname-parent jre-home)))
-         (truename (probe-file src-zip)))
-    (and truename (list truename))))
-
 (defun class-path ()
   (append (search-path-property "java.class.path")
           (search-path-property "sun.boot.class.path")))
-
-(defvar *source-path*
-  (remove nil 
-          (append 
-           (list (get :swank-abcl-source-path :path)) ;; so this can be set in .abclrc, before *source-path* exists
-           (search-path-property "user.dir")
-           (jdk-source-path)
-           ;; include lib jar files. contrib has lisp code. Would be good to build abcl.jar with source code as well
-           #+abcl-introspect
-           (list (sys::find-system-jar)
-                 (sys::find-contrib-jar))))
-  ;; you should tell slime where the abcl sources are. In .swank.lisp I have:
-  ;; (push (probe-file "/Users/alanr/repos/abcl/src/") *SOURCE-PATH*)
-  "List of directories to search for source files.")
 
 (defun zipfile-contains-p (zipfile-name entry-name)
   (let ((zipfile (jnew (jconstructor "java.util.zip.ZipFile"
@@ -1015,15 +1017,38 @@
                  (when i-var
                    (push i-var implementation-variables))
                  (when i-fun
-                   (push i-fun implementation-functions))))
+                   (push i-fun implementation-functions))
+                 ))
     (setq sources (remove-duplicates sources :test 'equalp))
     (append (remove-duplicates implementation-functions :test 'equalp)
-            (mapcar (lambda(s) (slime-location-from-source-annotation symbol s)) sources)
+            (mapcan (lambda(s) (slime-location-from-source-annotation symbol s)) sources)
             (remove-duplicates implementation-variables :test 'equalp))))
+
+(defvar *when-in-file-system-and-jar-choose* :filesystem
+  "Source for ABCL may be in jar file and in file system as well. This variables chooses whether 
+to show both of them as locations (:both) just the filesystem (:filesystem) or just the jar (:jar)")
+
+;; if a jar file source is also found on the file system, return the filesystem as (:file <path>)
+(defun jar-location-in-file-system-too (jar)
+  (let ((source (pathname jar)))
+    (when source
+      (if (typep source 'ext::jar-pathname)
+          (let* ((jar (namestring (car (pathname-device source))))
+                 (system-jar (namestring (sys::find-system-jar)))
+                 (adjusted (subseq system-jar 4 (- (length system-jar) 2))))
+            (and (equal adjusted jar)
+                 (let ((found 
+                         (find-file-in-path
+                          (namestring (make-pathname :directory (substitute :relative :absolute (pathname-directory source))
+                                                     :name (pathname-name source) 
+                                                     :type (pathname-type source))
+                                      )
+                          *source-path*)))
+                   (if (and (consp found) (eq (car found) :file) (probe-file (second found)))
+                       found))))))))
 
 (defun slime-location-from-source-annotation (sym it)
   (destructuring-bind (what path pos) it
-
     (let* ((isfunction
             ;; all of these are (defxxx forms, which is what :function locations look for in slime
             (and (consp what) (member (car what)
@@ -1041,7 +1066,8 @@
                       (maybe-redirect-to-jar path))))
       (when (atom what)
         (setq what (list what sym)))
-      (list (definition-specifier what)
+      (let ((choices 
+              (list* (list (definition-specifier what)
             (if (ext:pathname-jar-p (pathname path2))
                 `(:location
                   (:zip ,@(split-string (subseq path2 (length "jar:file:")) "!/"))
@@ -1059,7 +1085,24 @@
                       `(:location
                         (:file ,path2)
                         ,<position>
-                        (:align t))))))))
+                                     (:align t)))))
+                     (when (ext:pathname-jar-p (pathname path2))
+                       (let ((file-system-alternative (jar-location-in-file-system-too (pathname path2))))
+                         (when file-system-alternative
+                           (list (list (definition-specifier what)
+                                       `(:location
+                                         ,file-system-alternative
+                                         ;; pos never seems right. Use function name.
+                                         ,<position>
+                                         (:align t)))))
+                         )))))
+        (if (= (length choices) 2)
+            (ecase *when-in-file-system-and-jar-choose* 
+              (:both choices)
+              (:filesystem (list (second choices)))
+              (:jar (list (first choices))))
+            choices))
+      )))
 
 #+abcl-introspect
 (defimplementation list-callers (thing)
@@ -1068,14 +1111,14 @@
         when (typep caller 'method)
           append (let ((name (mop:generic-function-name
                               (mop:method-generic-function caller))))
-                   (mapcar (lambda(s) (slime-location-from-source-annotation caller s))
+                   (mapcan (lambda(s) (slime-location-from-source-annotation caller s))
                            (remove `(:method ,@(sys::method-spec-list caller))
                                    (get 
                                     (if (consp name) (second name) name)
                                     'sys::source)
                                    :key 'car :test-not 'equalp)))
         when (symbolp caller)
-          append   (mapcar (lambda(s) (slime-location-from-source-annotation caller s))
+          append   (mapcan (lambda(s) (slime-location-from-source-annotation caller s))
                            (get caller 'sys::source))) :test 'equalp))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
