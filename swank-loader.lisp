@@ -159,11 +159,14 @@ Return nil if nothing appropriate is available."
               return (subseq line (length prefix))))))
 
 (defun default-fasl-dir ()
+  #+abcl
+  (unique-dir-name)
+  #-abcl
   (merge-pathnames
    (make-pathname
     :directory `(:relative ".slime" "fasl"
-                 ,@(if (slime-version-string) (list (slime-version-string)))
-                 ,(unique-dir-name)))
+                           ,@(if (slime-version-string) (list (slime-version-string)))
+                           ,(unique-dir-name)))
    (user-homedir-pathname)))
 
 (defvar *fasl-directory* (default-fasl-dir)
