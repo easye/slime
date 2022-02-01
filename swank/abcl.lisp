@@ -543,7 +543,7 @@
    (multiple-value-list
     (jvm::parse-lambda-list (ext:arglist operator)))
    values))
-  
+
 ;; Switch to enable or disable locals functionality
 (defvar *enable-locals* t)
 
@@ -552,31 +552,32 @@
         ;;(id -1)
         )
     ;; FIXME introspect locals in SYS::JAVA-STACK-FRAME
-    (if (and *enable-locals*
+    (or (and *enable-locals*
+             (fboundp 'sys::find-locals)
              (typep frame 'sys::lisp-stack-frame)
-             (not (compiled-function-p (jss::get-java-field (nth-frame index) "operator" t))))
-        (let ((locals (sys::find-locals index (backtrace 0 (1+ index)))))
-          (let ((argcount (length (cdr (nth-frame-list index))))
-                (them 
-                  (let ((operator (jss::get-java-field (nth-frame index) "operator" t)))
-                    (let* ((env (and (jss::jtypep operator 'lisp.closure) (jss::get-java-field operator "environment" t)))
-                           (closed-count (if env (length (sys::environment-parts env)) 0)))
-                      (declare (ignore closed-count))
-                      (when (not (compiled-function-p operator))
+             (not (compiled-function-p (jss::get-java-field (nth-frame index) "operator" t)))
+             (let ((locals (sys::find-locals index (backtrace 0 (1+ index)))))
+               (let ((argcount (length (cdr (nth-frame-list index))))
+                     (them 
+                       (let ((operator (jss::get-java-field (nth-frame index) "operator" t)))
+                         (let* ((env (and (jss::jtypep operator 'lisp.closure) (jss::get-java-field operator "environment" t)))
+                                (closed-count (if env (length (sys::environment-parts env)) 0)))
+                           (declare (ignore closed-count))
+                           (when (not (compiled-function-p operator))
                                         ; FIXME closed-over are in parts but also in locals
                                         ; FIXME closed-over are in compiled functions to but are value of internal field
                                         ; environment is the enviromnet of 
-                        (when *enable-locals*
-                          (loop for (kind symbol value) in (caar locals)
-                                when (eq kind :lexical-variable)
+                             (when *enable-locals*
+                               (loop for (kind symbol value) in (caar locals)
+                                     when (eq kind :lexical-variable)
                                         ; FIXME should I qualify each by whether arg, closed-over, let-bound?
-                                  collect (list :name symbol 
-                                                :id 0        
-                                                :value value))))))))
-                (declare (ignore argcount))
-                (reverse them)))
+                                       collect (list :name symbol 
+                                                     :id 0        
+                                                     :value value))))))))
+                 (declare (ignore argcount))
+                 (reverse them))))
         ;; locals not available, fallback to original
-       (loop
+        (loop
           :with frame = (nth-frame-list index)
           :with operator = (first frame)
           :with values = (rest frame)
@@ -587,7 +588,7 @@
                               :not-available)
           :for value :in values
           for id from 0
-          :collecting (list
+          :collecting (list 
                        :name (if (not (keywordp arglist)) ;; FIXME: WHat does this do?
                                  (format nil "arg-~a" (first (nth id arglist)))
                                  (format nil "arg~A" id))
@@ -598,8 +599,12 @@
 (defimplementation frame-var-value (index id)
   (if (and *enable-locals*
            (typep (nth-frame index) 'sys::lisp-stack-frame)
-           (not (compiled-function-p (jss::get-java-field (nth-frame index) "operator" t))))
-      (third (nth id (reverse (remove :lexical-variable (caar (find-locals index)) :test-not 'eq :key 'car))))
+           (let ((operator (jss::get-java-field (nth-frame index) "operator" t)))
+             (and (function-lambda-expression (if (functionp operator) operator (symbol-function operator)))
+                  (not (member operator '(java::jcall java::jcall-static)))
+                  (and (symbolp operator) (not (eq (symbol-package operator) (find-package 'cl))))))) ;; WTF, length is an interpreted function??
+      (progn (:print-db (jss::get-java-field (nth-frame index) "operator" t))
+             (third (nth id (reverse (remove :lexical-variable (caar (sys::find-locals index (backtrace 0 (1+ index)))) :test-not 'eq :key 'car)))))
       (elt (rest (jcall "toLispList" (nth-frame index))) id)))
 
 #+abcl-introspect
@@ -751,7 +756,7 @@
                   (split-string classname "\\$")
                   (list classname (jcall "replaceFirst" classname "([^.]*\\.)*" "")))
             (unless (member local '("MacroObject" "CompiledClosure" "Closure") :test 'equal)
-            ;; look for java source
+              ;; look for java source
               (let* ((partial-path   (substitute #\/ #\. class))
                      (java-path (concatenate 'string partial-path ".java"))
                      (found-in-source-path (find-file-in-path java-path *source-path*))) 
@@ -770,7 +775,7 @@
                     ;; with jad <https://github.com/moparisthebest/jad>
                     ;; Also (setq sys::*disassembler* "jad -a -p")
                     (let ((class-in-source-path 
-                           (find-file-in-path (concatenate 'string partial-path ".class") *source-path*)))
+                            (find-file-in-path (concatenate 'string partial-path ".class") *source-path*)))
                       ;; no snippet, since internal class is in its own file
                       (when class-in-source-path
                         `(:primitive (:location ,class-in-source-path (:line 0) nil)))))))))))))
@@ -1050,14 +1055,14 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
 (defun slime-location-from-source-annotation (sym it)
   (destructuring-bind (what path pos) it
     (let* ((isfunction
-            ;; all of these are (defxxx forms, which is what :function locations look for in slime
-            (and (consp what) (member (car what)
-                                      '(:function :generic-function :macro :class :compiler-macro
-                                        :type :constant :variable :package :structure :condition))))
+             ;; all of these are (defxxx forms, which is what :function locations look for in slime
+             (and (consp what) (member (car what)
+                                       '(:function :generic-function :macro :class :compiler-macro
+                                         :type :constant :variable :package :structure :condition))))
            (ismethod (and (consp what) (eq (car what) :method)))
            (<position> (cond (isfunction (list :function-name (princ-to-string (second what))))
-                                             (ismethod (stringify-method-specs what))
-                                             (t (list :position (1+ (or pos 0))))))
+                             (ismethod (stringify-method-specs what))
+                             (t (list :position (1+ (or pos 0))))))
 
            (path2 (if (eq path :top-level)
                       ;; this is bogus - figure out some way to guess which is the repl associated with :toplevel
@@ -1068,23 +1073,23 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
         (setq what (list what sym)))
       (let ((choices 
               (list* (list (definition-specifier what)
-            (if (ext:pathname-jar-p (pathname path2))
-                `(:location
-                  (:zip ,@(split-string (subseq path2 (length "jar:file:")) "!/"))
-                  ;; pos never seems right. Use function name.
-                  ,<position>
-                  (:align t))
-                ;; conspire with swank-compile-string to keep the
-                ;; buffer name in a pathname whose device is
-                ;; "emacs-buffer".
-                  (if (eql 0 (search "emacs-buffer:" path2))
-                      `(:location
-                        (:buffer ,(subseq path2  (load-time-value (length "emacs-buffer:"))))
-                        ,<position>
-                        (:align t))
-                      `(:location
-                        (:file ,path2)
-                        ,<position>
+                           (if (ext:pathname-jar-p (pathname path2))
+                               `(:location
+                                 (:zip ,@(split-string (subseq path2 (length "jar:file:")) "!/"))
+                                 ;; pos never seems right. Use function name.
+                                 ,<position>
+                                 (:align t))
+                               ;; conspire with swank-compile-string to keep the
+                               ;; buffer name in a pathname whose device is
+                               ;; "emacs-buffer".
+                               (if (eql 0 (search "emacs-buffer:" path2))
+                                   `(:location
+                                     (:buffer ,(subseq path2  (load-time-value (length "emacs-buffer:"))))
+                                     ,<position>
+                                     (:align t))
+                                   `(:location
+                                     (:file ,path2)
+                                     ,<position>
                                      (:align t)))))
                      (when (ext:pathname-jar-p (pathname path2))
                        (let ((file-system-alternative (jar-location-in-file-system-too (pathname path2))))
@@ -1143,6 +1148,27 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
 ;;; non-computationally expensive operation this isn't always the
 ;;; case, so make its computation a user interaction.
 (defparameter *to-string-hashtable* (make-hash-table :weakness :key))
+
+;; ****************
+;; Offer to inspect as java object
+
+(defvar *inspect-as-java-object*)
+
+(defmethod emacs-inspect :around ((o t))
+  (if (boundp '*inspect-as-java-object*)
+      (if (jinstance-of-p o (jclass "java.lang.Class"))
+          (emacs-inspect-java-class o)
+          (emacs-inspect-java-object o))
+      (append 
+       (unless (java-object-p o)
+         `((:action "[Inspect as java object]" 
+                    ,(lambda()(let ((*inspect-as-java-object* t))
+                                (inspect o)
+                                nil)) :refreshp nil)
+           (:newline)))
+       (call-next-method))))
+          
+;;****************
 
 (defmethod emacs-inspect ((o t))
   (let* ((type (type-of o))
