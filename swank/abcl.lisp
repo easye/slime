@@ -555,7 +555,11 @@
     (or (and *enable-locals*
              (fboundp 'sys::find-locals)
              (typep frame 'sys::lisp-stack-frame)
-             (not (compiled-function-p (jss::get-java-field (nth-frame index) "operator" t)))
+             (let ((operator (jss::get-java-field (nth-frame index) "operator" t)))
+               (and (function-lambda-expression (if (functionp operator) operator (symbol-function operator)))
+                    (not (member operator '(java::jcall java::jcall-static)))
+                    (and (symbolp operator) (not (eq (symbol-package operator) (find-package 'cl))))))) ;; WTF, length is an interpreted function??
+
              (let ((locals (sys::find-locals index (backtrace 0 (1+ index)))))
                (let ((argcount (length (cdr (nth-frame-list index))))
                      (them 
