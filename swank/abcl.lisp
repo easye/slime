@@ -560,45 +560,45 @@
                     (not (member operator '(java::jcall java::jcall-static)))
                     (and (symbolp operator) (not (eq (symbol-package operator) (find-package 'cl))))))) ;; WTF, length is an interpreted function??
 
-             (let ((locals (sys::find-locals index (backtrace 0 (1+ index)))))
-               (let ((argcount (length (cdr (nth-frame-list index))))
-                     (them 
-                       (let ((operator (jss::get-java-field (nth-frame index) "operator" t)))
-                         (let* ((env (and (jss::jtypep operator 'lisp.closure) (jss::get-java-field operator "environment" t)))
-                                (closed-count (if env (length (sys::environment-parts env)) 0)))
-                           (declare (ignore closed-count))
-                           (when (not (compiled-function-p operator))
+        (let ((locals (sys::find-locals index (backtrace 0 (1+ index)))))
+          (let ((argcount (length (cdr (nth-frame-list index))))
+                (them 
+                  (let ((operator (jss::get-java-field (nth-frame index) "operator" t)))
+                    (let* ((env (and (jss::jtypep operator 'lisp.closure) (jss::get-java-field operator "environment" t)))
+                           (closed-count (if env (length (sys::environment-parts env)) 0)))
+                      (declare (ignore closed-count))
+                      (when (not (compiled-function-p operator))
                                         ; FIXME closed-over are in parts but also in locals
                                         ; FIXME closed-over are in compiled functions to but are value of internal field
                                         ; environment is the enviromnet of 
-                             (when *enable-locals*
-                               (loop for (kind symbol value) in (caar locals)
-                                     when (eq kind :lexical-variable)
+                        (when *enable-locals*
+                          (loop for (kind symbol value) in (caar locals)
+                                when (eq kind :lexical-variable)
                                         ; FIXME should I qualify each by whether arg, closed-over, let-bound?
-                                       collect (list :name symbol 
-                                                     :id 0        
-                                                     :value value))))))))
-                 (declare (ignore argcount))
-                 (reverse them))))
-        ;; locals not available, fallback to original
-        (loop
-          :with frame = (nth-frame-list index)
-          :with operator = (first frame)
-          :with values = (rest frame)
-          :with arglist = (if (and operator (consp values) (not (null values)))
-                              (handler-case (match-lambda operator values)
-                                (jvm::lambda-list-mismatch (e) (declare(ignore e))
-                                  :lambda-list-mismatch))
-                              :not-available)
-          :for value :in values
-          for id from 0
-          :collecting (list 
-                       :name (if (not (keywordp arglist)) ;; FIXME: WHat does this do?
-                                 (format nil "arg-~a" (first (nth id arglist)))
-                                 (format nil "arg~A" id))
-                       :id 0 ;; FIXME how is id supposed to be used
-                       :value value))
-        )))
+                                  collect (list :name symbol 
+                                                :id 0        
+                                                :value value))))))))
+            (declare (ignore argcount))
+            (reverse them))))
+    ;; locals not available, fallback to original
+    (loop
+      :with frame = (nth-frame-list index)
+      :with operator = (first frame)
+      :with values = (rest frame)
+      :with arglist = (if (and operator (consp values) (not (null values)))
+                          (handler-case (match-lambda operator values)
+                            (jvm::lambda-list-mismatch (e) (declare(ignore e))
+                              :lambda-list-mismatch))
+                          :not-available)
+      :for value :in values
+      for id from 0
+      :collecting (list 
+                   :name (if (not (keywordp arglist)) ;; FIXME: WHat does this do?
+                             (format nil "arg-~a" (first (nth id arglist)))
+                             (format nil "arg~A" id))
+                   :id 0 ;; FIXME how is id supposed to be used
+                   :value value))
+    ))
 
 (defimplementation frame-var-value (index id)
   (if (and *enable-locals*
@@ -1163,14 +1163,18 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
       (if (jinstance-of-p o (jclass "java.lang.Class"))
           (emacs-inspect-java-class o)
           (emacs-inspect-java-object o))
-      (append 
-       (unless (java-object-p o)
-         `((:action "[Inspect as java object]" 
-                    ,(lambda()(let ((*inspect-as-java-object* t))
-                                (inspect o)
-                                nil)) :refreshp nil)
-           (:newline)))
-       (call-next-method))))
+      (let* ((usual (call-next-method))
+             (lcons? (typep usual 'swank::lcons))
+             (action `(:action "[Inspect as java object]" 
+                                               ,(lambda()(let ((*inspect-as-java-object* t))
+                                                           (inspect o)
+                                                           nil)) :refreshp nil)))
+        (if (not (java-object-p o))
+            (if lcons?
+                (swank::lcons action
+                       (swank::lcons '(:newline) usual))
+                (cons action (cons '(:newline) usual)))
+            usual))))
           
 ;;****************
 
