@@ -1002,6 +1002,29 @@
   (let ((srcloc (source-location symbol)))
     (and srcloc `((,symbol ,srcloc)))))
 
+(defun definition-source-if-a-system (symbol)
+  (let* ((name (string-downcase (string symbol)))
+         (system (asdf::find-system name nil)))
+    (if system
+        (let ((source (namestring (slot-value system 'asdf::source-file)))
+              (snippet (format nil "defsystem ~a" name)))
+          (let* ((file-system-alternative (and (typep (pathname source) 'ext::jar-pathname)
+                                               (jar-location-in-file-system-too (pathname source))))
+                 (choices
+                   `(,@(when file-system-alternative
+                         (list (list `(:system ,symbol)
+                                     `(:location
+                                       ,file-system-alternative
+                                       ;; pos never seems right. Use function name.
+                                       (:line 0)
+                                       (:snippet ,snippet)))))
+                     `((:system ,symbol) (:location (:file ,source) (:line 0) (:snippet ,snippet))))))
+            (ecase *when-in-file-system-and-jar-choose* 
+              (:both choices)
+              (:filesystem (list (first choices)))
+              (:jar (list (second choices))))
+                   )))))
+
 #+abcl-introspect
 (defimplementation find-definitions (symbol)
   (when (stringp symbol) 
@@ -1031,7 +1054,9 @@
     (setq sources (remove-duplicates sources :test 'equalp))
     (append (remove-duplicates implementation-functions :test 'equalp)
             (mapcan (lambda(s) (slime-location-from-source-annotation symbol s)) sources)
-            (remove-duplicates implementation-variables :test 'equalp))))
+            (remove-duplicates implementation-variables :test 'equalp)
+            (definition-source-if-a-system symbol)
+            )))
 
 (defvar *when-in-file-system-and-jar-choose* :filesystem
   "Source for ABCL may be in jar file and in file system as well. This variables chooses whether 
