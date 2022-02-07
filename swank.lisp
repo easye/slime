@@ -3049,13 +3049,17 @@ DSPEC is a string and LOCATION a source location. NAME is a string."
   (define-xref-action :callers      #'list-callers)
   (define-xref-action :callees      #'list-callees))
 
-(defslimefun xref (type name)
-  (multiple-value-bind (sexp error) (ignore-errors (from-string name))
-    (unless error
-      (let ((xrefs  (xref-doit type sexp)))
-        (if (eq xrefs :not-implemented)
-            :not-implemented
-            (mapcar #'xref>elisp xrefs))))))
+(defslimefun xref (type name &optional inspector-part)
+  (flet ((doit(thing)
+           (let ((xrefs  (xref-doit type thing)))
+             (if (eq xrefs :not-implemented)
+                 :not-implemented
+                 (mapcar #'xref>elisp xrefs)))))
+    (if (and inspector-part (symbolp (inspector-nth-part inspector-part)))
+        (doit (inspector-nth-part inspector-part))
+        (multiple-value-bind (sexp error) (ignore-errors (from-string name))
+          (unless error
+            (doit sexp))))))
 
 (defslimefun xrefs (types name)
   (loop for type in types

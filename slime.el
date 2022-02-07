@@ -4668,7 +4668,7 @@ This is used by `slime-goto-next-xref'")
 (defun slime-xref (type symbol &optional continuation)
   "Make an XREF request to Lisp."
   (slime-eval-async
-      `(swank:xref ',type ',symbol)
+      `(swank:xref ',type ',symbol ,(get-text-property (point) 'slime-part-number))
     (slime-rcurry (lambda (result type symbol package cont)
                     (slime-check-xref-implemented type result)
                     (let* ((_xrefs (slime-postprocess-xrefs result))
