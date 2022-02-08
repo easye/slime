@@ -547,39 +547,41 @@
 ;; Switch to enable or disable locals functionality
 (defvar *enable-locals* t)
 
+(defun are-there-locals? (frame index)
+  (and *enable-locals*
+       (fboundp 'sys::find-locals)
+       (typep frame 'sys::lisp-stack-frame)
+       (let ((operator (jss::get-java-field (nth-frame index) "operator" t)))
+         (and  (function-lambda-expression (if (functionp operator) operator (symbol-function operator)))
+               (not (member operator '(java::jcall java::jcall-static))) ;; WTF, length is an interpreted function??
+               (if (symbolp operator)
+                   (not (eq (symbol-package operator) (find-package 'cl)))
+                   t)))))
+
 (defimplementation frame-locals (index)
   (let ((frame (nth-frame index))
         ;;(id -1)
         )
     ;; FIXME introspect locals in SYS::JAVA-STACK-FRAME
-    (or (and *enable-locals*
-             (fboundp 'sys::find-locals)
-             (typep frame 'sys::lisp-stack-frame)
-             (let ((operator (jss::get-java-field (nth-frame index) "operator" t)))
-               (and (function-lambda-expression (if (functionp operator) operator (symbol-function operator)))
-                    (not (member operator '(java::jcall java::jcall-static)))
-                    (and (symbolp operator) (not (eq (symbol-package operator) (find-package 'cl))))))) ;; WTF, length is an interpreted function??
-
-        (let ((locals (sys::find-locals index (backtrace 0 (1+ index)))))
-          (let ((argcount (length (cdr (nth-frame-list index))))
-                (them 
-                  (let ((operator (jss::get-java-field (nth-frame index) "operator" t)))
-                    (let* ((env (and (jss::jtypep operator 'lisp.closure) (jss::get-java-field operator "environment" t)))
-                           (closed-count (if env (length (sys::environment-parts env)) 0)))
-                      (declare (ignore closed-count))
-                      (when (not (compiled-function-p operator))
+    (or (and (are-there-locals? frame index)
+             (let ((locals (sys::find-locals index (backtrace 0 (1+ index)))))
+               (let ((argcount (length (cdr (nth-frame-list index))))
+                     (them 
+                       (let ((operator (jss::get-java-field (nth-frame index) "operator" t)))
+                         (let* ((env (and (jss::jtypep operator 'lisp.closure) (jss::get-java-field operator "environment" t)))
+                                (closed-count (if env (length (sys::environment-parts env)) 0)))
+                           (declare (ignore closed-count))
                                         ; FIXME closed-over are in parts but also in locals
                                         ; FIXME closed-over are in compiled functions to but are value of internal field
                                         ; environment is the enviromnet of 
-                        (when *enable-locals*
-                          (loop for (kind symbol value) in (caar locals)
-                                when (eq kind :lexical-variable)
+                           (loop for (kind symbol value) in (caar locals)
+                                 when (eq kind :lexical-variable)
                                         ; FIXME should I qualify each by whether arg, closed-over, let-bound?
-                                  collect (list :name symbol 
-                                                :id 0        
-                                                :value value))))))))
-            (declare (ignore argcount))
-            (reverse them))))
+                                   collect (list :name symbol 
+                                                 :id 0        
+                                                 :value value))))))
+                 (declare (ignore argcount))
+                 (reverse them))))
     ;; locals not available, fallback to original
     (loop
       :with frame = (nth-frame-list index)
@@ -598,17 +600,11 @@
                              (format nil "arg~A" id))
                    :id 0 ;; FIXME how is id supposed to be used
                    :value value))
-    ))
+    )))
 
 (defimplementation frame-var-value (index id)
-  (if (and *enable-locals*
-           (typep (nth-frame index) 'sys::lisp-stack-frame)
-           (let ((operator (jss::get-java-field (nth-frame index) "operator" t)))
-             (and (function-lambda-expression (if (functionp operator) operator (symbol-function operator)))
-                  (not (member operator '(java::jcall java::jcall-static)))
-                  (and (symbolp operator) (not (eq (symbol-package operator) (find-package 'cl))))))) ;; WTF, length is an interpreted function??
-      (progn (:print-db (jss::get-java-field (nth-frame index) "operator" t))
-             (third (nth id (reverse (remove :lexical-variable (caar (sys::find-locals index (backtrace 0 (1+ index)))) :test-not 'eq :key 'car)))))
+  (if (are-there-locals? (nth-frame index) index)
+      (third (nth id (reverse (remove :lexical-variable (caar (sys::find-locals index (backtrace 0 (1+ index)))) :test-not 'eq :key 'car))))
       (elt (rest (jcall "toLispList" (nth-frame index))) id)))
 
 #+abcl-introspect
@@ -828,6 +824,10 @@
                  do (return-from if-we-have-to-choose-one-choose-the-function spec))
       (car sources)))
 
+(defimplementation find-source-location (object)
+  (source-location object))
+    
+    
 (defmethod source-location ((symbol symbol))
   (or #+abcl-introspect
       (let ((maybe (if-we-have-to-choose-one-choose-the-function (get symbol 'sys::source))))
@@ -1644,7 +1644,7 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
 
 (defun in-sldb (thread) 
   (block it
-    (loop with trace = (#"getStackTrace" (cl-user::get-java-field thread "javaThread" t))
+    (loop with trace = (#"getStackTrace" (jss::get-java-field thread "javaThread" t))
           with has-sldb-loop =  (find-if (lambda(el)
                                           (eq (gethash (#"getClassName" el) sys::*function-class-names*)
                                               #'swank::sldb-loop))
