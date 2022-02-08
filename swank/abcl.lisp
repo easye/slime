@@ -1356,7 +1356,10 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
                           (list "  "
                                 `(:label ,(jcall "getName" field))
                                 ": "
-                                (if cant-access '(:styled-value :dim :inaccessible) `(:value ,value ,(princ-to-string value)))
+                                (if cant-access 
+                                    '(:styled-value :dim :inaccessible) 
+                                    `(:value ,value 
+                                             ,(maybe-with-prefixed-symbol value)))
                                 '(:newline)))))))
       #+abcl-introspect
       ,@(when (and (function-name f) (symbolp (function-name f))
@@ -1365,6 +1368,19 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
                                   (lambda () (hyperspec-do (symbol-name (function-name f))))
                                   :refreshp nil)
                 '(:newline)))))
+
+(defun maybe-with-prefixed-symbol (thing)
+  (if (symbolp thing)
+      (let ((*print-case* :downcase))
+        (if (eq (symbol-package thing) *package*)
+            (princ-to-string thing)
+            (if (eq (symbol-package thing) swank::keyword-package)
+                (prin1-to-string thing)
+                (format nil "~a~a~a" (string-downcase (swank::shortest-package-name (symbol-package thing)))
+                        (if (swank::symbol-external-p thing) ":" "::")
+                        thing)))
+        (prin1-to-string thing))))
+                    
 
 (defmethod emacs-inspect ((o java:java-object))
   (if (jinstance-of-p o (jclass "java.lang.Class"))
