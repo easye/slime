@@ -1181,14 +1181,15 @@
           (when (plusp (length fields))
             (list* '(:label "Internal fields: ") '(:newline)
                    (loop for field across fields
-                      do (jcall "setAccessible" field t) ;;; not a great idea esp. wrt. Java9
-                      append
-                        (let ((value (jcall "get" field f)))
-                          (list "  "
-                                `(:label ,(jcall "getName" field))
-                                ": "
-                                `(:value ,value ,(princ-to-string value))
-                                '(:newline)))))))
+                         do (jcall "setAccessible" field t) ;;; not a great idea esp. wrt. Java9
+                         append
+                         (let ((value (jcall "get" field f)))
+                           (list "  "
+                                 `(:label ,(jcall "getName" field))
+                                 ": "
+                                 `(:value ,value 
+                                          ,(maybe-with-prefixed-symbol value))
+                                 '(:newline)))))))
       #+abcl-introspect
       ,@(when (and (function-name f) (symbolp (function-name f))
                    (eq (symbol-package (function-name f)) (find-package :cl)))
@@ -1196,6 +1197,19 @@
                                   (lambda () (hyperspec-do (symbol-name (function-name f))))
                                   :refreshp nil)
                 '(:newline)))))
+
+(defun maybe-with-prefixed-symbol (thing)
+  (if (symbolp thing)
+      (let ((*print-case* :downcase))
+        (if (eq (symbol-package thing) *package*)
+            (princ-to-string thing)
+            (if (eq (symbol-package thing) swank::keyword-package)
+                (prin1-to-string thing)
+                (format nil "~a~a~a" (string-downcase (swank::shortest-package-name (symbol-package thing)))
+                        (if (swank::symbol-external-p thing) ":" "::")
+                        thing)))
+        (prin1-to-string thing))))
+                    
 
 (defmethod emacs-inspect ((o java:java-object))
   (if (jinstance-of-p o (jclass "java.lang.Class"))
