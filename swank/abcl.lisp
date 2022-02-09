@@ -1050,7 +1050,7 @@
                      (i-fun  (implementation-source-location sym)))
                  (when source
                    (setq sources (append sources (or (get sym 'ext::source) (get sym 'sys::source)))))
-                 (when i-var
+                 (when (and i-var (not (or source i-fun)))
                    (push i-var implementation-variables))
                  (when i-fun
                    (push i-fun implementation-functions))
