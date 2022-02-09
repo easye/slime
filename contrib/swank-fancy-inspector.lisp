@@ -9,6 +9,15 @@
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (swank-require :swank-util))
 
+(defun symbol-info (symbol)
+  (list (and (constantp symbol) (symbol-value symbol))
+	  (and (fboundp symbol) (symbol-function symbol))
+	  (and (boundp symbol) (symbol-value symbol))
+	  (and (find-class symbol nil) (find-class symbol))
+	  (find-package symbol)
+	  #+armedbear (get symbol 'sys::structure-definition)))
+
+    
 (defmethod emacs-inspect ((symbol symbol))
   (let ((package (symbol-package symbol)))
     (multiple-value-bind (_symbol status)
@@ -39,9 +48,9 @@
         ;; Function
         (if (fboundp symbol)
             (append (if (macro-function symbol)
-                        `("It a macro with macro-function: "
+                        `((:label "It a macro with macro-function: ")
                           (:value ,(macro-function symbol)))
-                        `("It is a function: "
+                        `((:label "It is a function: ")
                           (:value ,(symbol-function symbol))))
                     `(" " (:action "[unbind]"
                                    ,(lambda () (fmakunbound symbol))))
@@ -61,8 +70,8 @@
         ;;
         ;; Package
         (if package
-            `("It is " ,(string-downcase (string status))
-                       " to the package: "
+            `((:label "It is ") (:label ,(string-downcase (string status)))
+	      (:label " to the package: ")
                        (:value ,package ,(package-name package))
                        ,@(if (eq :internal status)
                              `(" "
@@ -79,17 +88,53 @@
         ;;
         ;; Class
         (if (find-class symbol nil)
-            `("It names the class "
-              (:value ,(find-class symbol) ,(string symbol))
+            `((:label "It names the class") ": "
+              (:value ,(find-class symbol) ,(format nil "~a" symbol))
               " "
               (:action "[remove]"
                        ,(lambda () (setf (find-class symbol) nil)))
               (:newline)))
-        ;;
+
         ;; More package
         (if (find-package symbol)
             (label-value-line "It names the package" (find-package symbol)))
+
+	;; Same string
+	(lines-for-symbol-in-other-packages symbol)
+       
         (inspect-type-specifier symbol)))))
+
+(defun lines-for-symbol-in-other-packages (symbol)
+  (let ((others
+         (loop for p in (list-all-packages) 
+            for candidate = (find-symbol (string symbol) p) 
+            for found = (and (not (null candidate)) 
+                             (eq (symbol-package candidate) p)
+                             (not (eq (symbol-package symbol) (symbol-package candidate)))
+                             candidate)
+            for (constant function value class package structure) = (and found (symbol-info found))
+            for specs  = (and found
+                              (append (when value
+                                        `((:value ,value
+                                                  ,(if constant "constant" "bound")) ", "))
+                                      (when function
+                                        `((:value ,function "fbound") ", "))
+                                      (when package
+                                        `((:value ,package "package") ", "))
+                                      (when class
+                                        `((:value ,class "class") ", "))
+                                      (when structure
+                                        `((:value ,structure "structure") ", "))))
+            when found
+            collect
+              (let ((specs (butlast specs)))
+                (list* "  " (list :value found (let ((*package* (find-package :keyword))) (format nil "~s" found)))
+                       (if specs " " "")
+                       (append specs '((:newline))))))))
+    (if others
+        `((:label "In other packages:") " "
+          (:newline)  
+          ,@(apply 'append others)))))
 
 #-sbcl
 (defun inspect-type-specifier (symbol)
@@ -139,9 +184,9 @@
     (cond ((not docstring) nil)
           ((< (+ (length label) (length docstring))
               75)
-           (list label ": " docstring '(:newline)))
+           (list `(:label ,label) ": " docstring '(:newline)))
           (t
-           (list label ":" '(:newline) "  " docstring '(:newline))))))
+           (list `(:label ,label) ":" '(:newline) "  " docstring '(:newline))))))
 
 (unless (find-method #'emacs-inspect '() (list (find-class 'function)) nil)
   (defmethod emacs-inspect ((f function))
@@ -149,13 +194,15 @@
 
 (defun inspect-function (f)
   (append
-   (label-value-line "Name" (function-name f))
-   `("Its argument list is: "
-     ,(inspector-princ (arglist f)) (:newline))
-   (docstring-ispec "Documentation" f t)
-   (if (function-lambda-expression f)
-       (label-value-line "Lambda Expression"
-                         (function-lambda-expression f)))))
+   (list '(:label "Name:") (function-name f))
+   (disassemble-action f)
+   '((:newline)))
+  `((:label "Argument list: ")
+    ,(inspector-princ (arglist f)) (:newline))
+  (docstring-ispec "Documentation" f t)
+  (if (function-lambda-expression f)
+      (label-value-line "Lambda Expression"
+			(function-lambda-expression f))))
 
 (defun method-specializers-for-inspect (method)
   "Return a \"pretty\" list of the method's specializers. Normal
@@ -341,7 +388,7 @@ See `methods-by-applicability'.")
       ,@ (case (ref grouping-kind)
            (:all
             `((:newline)
-              "All Slots:"
+              (:label "All Slots:")
               (:newline)
               ,@(make-slot-listing checklist object class
                                    effective-slots direct-slots
@@ -451,7 +498,7 @@ See `methods-by-applicability'.")
 
 
 (defmethod emacs-inspect ((gf standard-generic-function))
-  (flet ((lv (label value) (label-value-line label value)))
+  (flet ((lv (label value) `((:label ,label)": " (:value  ,value ,(princ-to-string value)) (:newline))))
     (append
       (lv "Name" (swank-mop:generic-function-name gf))
       (lv "Arguments" (swank-mop:generic-function-lambda-list gf))
@@ -459,7 +506,7 @@ See `methods-by-applicability'.")
       (lv "Method class" (swank-mop:generic-function-method-class gf))
       (lv "Method combination"
           (swank-mop:generic-function-method-combination gf))
-      `("Methods: " (:newline))
+      `((:label "Methods: ") (:newline))
       (loop for method in (funcall *gf-method-getter* gf) append
             `((:value ,method ,(inspector-princ
                                ;; drop the name of the GF
@@ -473,9 +520,19 @@ See `methods-by-applicability'.")
       `((:newline))
       (all-slots-for-inspector gf))))
 
+(defun disassemble-action(what)
+  (list " " (list :action "[disassemble]"
+	(lambda()
+	  (let ((it (with-output-to-string (s) 
+		      (let ((*standard-output* s))
+			(disassemble what )))))
+	    #+abcl (setq it (java::jcall "replaceAll" it "(?m)^; " ""))
+	    (swank::ed-in-emacs `(:string ,it ,(format nil "Disassembly of ~a" (or (and (functionp what) (function-name what))
+											 what)))))))))
+
 (defmethod emacs-inspect ((method standard-method))
   `(,@(if (swank-mop:method-generic-function method)
-          `("Method defined on the generic function "
+          `((:label "Method defined on the generic function ")
             (:value ,(swank-mop:method-generic-function method)
                     ,(inspector-princ
                       (swank-mop:generic-function-name
@@ -483,15 +540,16 @@ See `methods-by-applicability'.")
           '("Method without a generic function"))
       (:newline)
       ,@(docstring-ispec "Documentation" method t)
-      "Lambda List: " (:value ,(swank-mop:method-lambda-list method))
+      (:label "Lambda List: ") (:value ,(swank-mop:method-lambda-list method))
       (:newline)
-      "Specializers: " (:value ,(swank-mop:method-specializers method)
+      (:label "Specializers: ") (:value ,(swank-mop:method-specializers method)
                                ,(inspector-princ
                                  (method-specializers-for-inspect method)))
       (:newline)
-      "Qualifiers: " (:value ,(swank-mop:method-qualifiers method))
+      (:label "Qualifiers: ") (:value ,(swank-mop:method-qualifiers method))
       (:newline)
-      "Method function: " (:value ,(swank-mop:method-function method))
+      (:label "Method function: ") (:value ,(swank-mop:method-function method))
+      ,@(disassemble-action (swank-mop:method-function method))
       (:newline)
       ,@(all-slots-for-inspector method)))
 
@@ -508,22 +566,22 @@ See `methods-by-applicability'.")
                  (second name)))))))
 
 (defmethod emacs-inspect ((class standard-class))
-  `("Name: "
+  `((:label "Name: ")
     (:value ,(class-name class))
     (:newline)
-    "Super classes: "
-    ,@(common-seperated-spec (swank-mop:class-direct-superclasses class))
+    (:label "Super classes: ")
+    ,@(comma-separated-spec (swank-mop:class-direct-superclasses class))
     (:newline)
-    "Direct Slots: "
-    ,@(common-seperated-spec
+    (:label "Direct Slots: ")
+    ,@(comma-separated-spec
        (swank-mop:class-direct-slots class)
        (lambda (slot)
          `(:value ,slot ,(inspector-princ
                           (swank-mop:slot-definition-name slot)))))
     (:newline)
-    "Effective Slots: "
+    (:label "Effective Slots: ")
     ,@(if (swank-mop:class-finalized-p class)
-          (common-seperated-spec
+          (comma-separated-spec
            (swank-mop:class-slots class)
            (lambda (slot)
              `(:value ,slot ,(inspector-princ
@@ -534,16 +592,16 @@ See `methods-by-applicability'.")
     (:newline)
     ,@(let ((doc (documentation class t)))
         (when doc
-          `("Documentation:" (:newline) ,(inspector-princ doc) (:newline))))
-    "Sub classes: "
-    ,@(common-seperated-spec (swank-mop:class-direct-subclasses class)
+          `((:label "Documentation:") (:newline) ,(inspector-princ doc) (:newline))))
+    (:label "Sub classes: ")
+    ,@(comma-separated-spec (swank-mop:class-direct-subclasses class)
                              (lambda (sub)
                                `(:value ,sub
                                         ,(inspector-princ (class-name sub)))))
     (:newline)
-    "Precedence List: "
+    (:label "Precedence List: ")
     ,@(if (swank-mop:class-finalized-p class)
-          (common-seperated-spec
+          (comma-separated-spec
            (swank-mop:class-precedence-list class)
            (lambda (class)
              `(:value ,class ,(inspector-princ (class-name class)))))
@@ -554,16 +612,19 @@ See `methods-by-applicability'.")
           (:newline)
           ,@(loop
               for method in (specializer-direct-methods class)
+	      for method-spec = (method-for-inspect-value method)
               collect "  "
-              collect `(:value ,method
-                               ,(inspector-princ
-                                 (method-for-inspect-value method)))
+	      collect `(:value ,method ,(inspector-princ (car method-spec)))
+              collect `(:value ,method ,(format nil " (~{~a~^ ~})" (cdr method-spec)))
+	      append (let ((method method))
+		       `(" " (:action "[remove]"
+				      ,(lambda () (remove-method (swank-mop::method-generic-function method) method)))))
               collect '(:newline)
               if (documentation method t)
               collect "    Documentation: " and
               collect (abbrev-doc (documentation method t)) and
               collect '(:newline))))
-    "Prototype: " ,(if (swank-mop:class-finalized-p class)
+    (:label "Prototype: ") ,(if (swank-mop:class-finalized-p class)
                        `(:value ,(swank-mop:class-prototype class))
                        '"#<N/A (class not finalized)>")
     (:newline)
@@ -574,19 +635,19 @@ See `methods-by-applicability'.")
     (:value ,(swank-mop:slot-definition-name slot))
     (:newline)
     ,@(when (swank-mop:slot-definition-documentation slot)
-        `("Documentation:" (:newline)
+        `((:label "Documentation:") (:newline)
                            (:value ,(swank-mop:slot-definition-documentation
                                      slot))
                            (:newline)))
-    "Init args: "
+    (:label "Init args: ")
     (:value ,(swank-mop:slot-definition-initargs slot))
     (:newline)
-    "Init form: "
+    (:label "Init form: ")
     ,(if (swank-mop:slot-definition-initfunction slot)
          `(:value ,(swank-mop:slot-definition-initform slot))
          "#<unspecified>")
     (:newline)
-    "Init function: "
+    (:label "Init function: ")
     (:value ,(swank-mop:slot-definition-initfunction slot))
     (:newline)
     ,@(all-slots-for-inspector slot)))
@@ -618,6 +679,9 @@ concise string representation of what each symbol
 represents (see SYMBOL-CLASSIFICATION-STRING)"
   (let ((max-length (loop for s in symbols
                           maximizing (length (symbol-name s))))
+	(max-package-length
+	  (loop for s in symbols
+                          maximizing (length (and (symbol-package s) (package-name (symbol-package s))))))
         (distance 10)) ; empty distance between name and classification
     (flet ((string-representations (symbol)
              (let* ((name (symbol-name symbol))
@@ -632,18 +696,24 @@ represents (see SYMBOL-CLASSIFICATION-STRING)"
       `(""                           ; 8 is (length "Symbols:")
         "Symbols:" ,(make-string (+ -8 max-length distance)
                                  :initial-element #\Space)
-        "Flags:"
+        "Flags:   Package:"
         (:newline)
         ,(concatenate 'string        ; underlining dashes
                       (make-string (+ max-length distance -1)
                                    :initial-element #\-)
                       " "
-                      (symbol-classification-string '#:foo))
+                      (symbol-classification-string '#:foo)
+                      " "
+		      (make-string (max 8 (+ max-package-length))
+				   :initial-element #\-)
+
+		      )
         (:newline)
         ,@(loop for symbol in symbols appending
                (multiple-value-bind (symbol-string classification-string)
                    (string-representations symbol)
-                 `((:value ,symbol ,symbol-string) ,classification-string
+                 `((:value ,symbol ,symbol-string) ,classification-string " " 
+		   (:value ,(symbol-package symbol) ,(and (symbol-package symbol) (string-downcase (package-name (symbol-package symbol)))))
                    (:newline)
                    )))))))
 
@@ -727,25 +797,31 @@ SPECIAL-OPERATOR groups."
 (defmethod emacs-inspect ((package package))
   (let ((package-name         (package-name package))
         (package-nicknames    (package-nicknames package))
-        (local-nicknames      (package-local-nicknames package))
+        (package-local-nicknames    (package-local-nicknames package))
         (package-use-list     (package-use-list package))
         (package-used-by-list (package-used-by-list package))
         (shadowed-symbols     (package-shadowing-symbols package))
         (present-symbols      '()) (present-symbols-length   0)
         (internal-symbols     '()) (internal-symbols-length  0)
         (inherited-symbols    '()) (inherited-symbols-length 0)
-        (external-symbols     '()) (external-symbols-length  0))
+        (external-symbols     '()) (external-symbols-length  0)
+        (imported-symbols     '()) (imported-symbols-length  0))
 
     (do-symbols* (sym package)
       (let ((status (symbol-status sym package)))
         (when (eq status :inherited)
           (push sym inherited-symbols) (incf inherited-symbols-length)
           (go :continue))
-        (push sym present-symbols) (incf present-symbols-length)
+        (push sym present-symbols) 
+	(incf present-symbols-length)
         (cond ((eq status :internal)
-               (push sym internal-symbols) (incf internal-symbols-length))
-              (t
-               (push sym external-symbols) (incf external-symbols-length))))
+               (push sym internal-symbols)
+	       (incf internal-symbols-length)
+	       (when (not (eq (symbol-package sym) package))
+		 (push sym imported-symbols) (incf imported-symbols-length)))
+              ((eq status :external)
+               (push sym external-symbols) (incf external-symbols-length))
+	      (t (error "Status: ~a is not :internal :inherited or :exported" status))))
       :continue)
 
     (setf package-nicknames    (sort (copy-list package-nicknames)
@@ -756,33 +832,44 @@ SPECIAL-OPERATOR groups."
                                      #'string< :key #'package-name)
           shadowed-symbols     (sort (copy-list shadowed-symbols)
                                      #'string<))
-    ;;; SORT + STRING-LESSP conses on at least SBCL 0.9.18.
-    (setf present-symbols      (sort present-symbols  #'string<)
-          internal-symbols     (sort internal-symbols #'string<)
-          external-symbols     (sort external-symbols #'string<)
-          inherited-symbols    (sort inherited-symbols #'string<))
+;;; SORT + STRING-LESSP conses on at least SBCL 0.9.18.
+    (flet ((sort-comparison (a b)
+	     (if (eq (symbol-package a) (symbol-package b))
+		 (string< a b)
+		 (cond ((eq (symbol-package a) package)
+		       nil)
+		       ((eq (symbol-package b) package)
+			t)
+		       (t
+			(string< (package-name (symbol-package a)) (package-name (symbol-package b))))))))
+      (setf present-symbols      (sort present-symbols  #'sort-comparison)
+	    internal-symbols     (sort internal-symbols #'sort-comparison)
+	    external-symbols     (sort external-symbols #'sort-comparison)
+	    inherited-symbols    (sort inherited-symbols #'sort-comparison)
+	    imported-symbols     (sort imported-symbols #'sort-comparison)))
     `("" ;; dummy to preserve indentation.
-      "Name: " (:value ,package-name) (:newline)
+      (:label "Name: ") (:value ,package-name) (:newline)
 
-      "Nicknames: " ,@(common-seperated-spec package-nicknames) (:newline)
+      ,@(when package-nicknames
+	  `((:label "Nicknames: ")  ,@(comma-separated-spec package-nicknames) (:newline)))
 
-      ,@(when local-nicknames
-          `("Package-local nicknames: " (:value ,local-nicknames) (:newline)))
+      ,@(when package-local-nicknames
+          `((:label "Package-local nicknames: ") ,@(comma-separated-spec package-local-nicknames) (:newline)))
 
       ,@(when (documentation package t)
-          `("Documentation:" (:newline)
-                             ,(documentation package t) (:newline)))
+          `((:label "Documentation:") (:newline)
+	    ,(documentation package t) (:newline)))
 
-      "Use list: " ,@(common-seperated-spec
-                      package-use-list
-                      (lambda (package)
-                        `(:value ,package ,(package-name package))))
+      "Uses packages: " ,@(comma-separated-spec
+			   package-use-list
+			   (lambda (package)
+			     `(:value ,package ,(package-name package))))
       (:newline)
 
-      "Used by list: " ,@(common-seperated-spec
-                          package-used-by-list
-                          (lambda (package)
-                            `(:value ,package ,(package-name package))))
+      (:label "Used by packages: ") ,@(comma-separated-spec
+				       package-used-by-list
+				       (lambda (package)
+					 `(:value ,package ,(package-name package))))
       (:newline)
 
       ,(display-link "present" present-symbols  present-symbols-length
@@ -797,7 +884,9 @@ SPECIAL-OPERATOR groups."
                        "being inherited from another package.\""
                        (:newline)
                        "(CLHS glossary entry for `present')"
-                       (:newline)))
+                       (:newline)
+		       "Flags: [b]oundp [f]boundp [g]eneric-function [c]lass [m]acro [s]pecial-operator [p]ackage]"
+		       (:newline)))
 
       (:newline)
       ,(display-link "external" external-symbols external-symbols-length
@@ -812,7 +901,9 @@ SPECIAL-OPERATOR groups."
                        "[is] inherited by any other package that uses the"
                        (:newline)
                        "package.\" (CLHS glossary entry of `external')"
-                       (:newline)))
+                       (:newline)
+		       "Flags: [b]oundp [f]boundp [g]eneric-function [c]lass [m]acro [s]pecial-operator [p]ackage]"
+		       (:newline)))
       (:newline)
       ,(display-link "internal" internal-symbols internal-symbols-length
                      :title
@@ -835,7 +926,10 @@ SPECIAL-OPERATOR groups."
                        "entry of `internal' because it's assumed to be more"
                        (:newline)
                        "useful this way."
+		       (:newline)
+		       "Flags: [b]oundp [f]boundp [g]eneric-function [c]lass [m]acro [s]pecial-operator [p]ackage]"
                        (:newline)))
+
       (:newline)
       ,(display-link "inherited" inherited-symbols  inherited-symbols-length
                      :title
@@ -845,13 +939,25 @@ SPECIAL-OPERATOR groups."
                      '("A symbol is considered inherited in a package if it"
                        (:newline)
                        "was made accessible via USE-PACKAGE."
+		       (:newline)
+		       "Flags: [b]oundp [f]boundp [g]eneric-function [c]lass [m]acro [s]pecial-operator [p]ackage]"
                        (:newline)))
+      (:newline)
+      ,(display-link "imported internal" imported-symbols  (length imported-symbols)
+                     :title
+                     (format nil "All imported, but not exported, symbols of package \"~A\""
+                             package-name)
+                     :description
+		     '("Flags: [b]oundp [f]boundp [g]eneric-function [c]lass [m]acro [s]pecial-operator [p]ackage]"
+		       (:newline)))
       (:newline)
       ,(display-link "shadowed" shadowed-symbols (length shadowed-symbols)
                      :title
                      (format nil "All shadowed symbols of package \"~A\""
                              package-name)
-                     :description nil))))
+                     :description
+		     '("Flags: [b]oundp [f]boundp [g]eneric-function [c]lass [m]acro [s]pecial-operator [p]ackage]"
+		       (:newline))))))
 
 
 (defmethod emacs-inspect ((pathname pathname))
@@ -947,6 +1053,30 @@ SPECIAL-OPERATOR groups."
     ((not (float-infinity-p f))
      (multiple-value-bind (significand exponent sign) (decode-float f)
        (append
+	`((:label "Scientific: ") ,(format nil "~E" f) (:newline)
+	  (:label "Decoded: ")
+			 (:value ,sign) " * "
+			 (:value ,significand) " * "
+			 (:value ,(float-radix f)) "^"
+			 (:value ,exponent) (:newline))
+	`((:label "Digits: ") (:value ,(float-digits f)) (:newline))
+	`((:label "Precision: ") (:value ,(float-precision f)) (:newline)))))
+    ((> f 0)
+     (list "Positive infinity."))
+    ((< f 0)
+     (list "Negative infinity."))))
+
+(defmethod emacs-inspect ((f float))
+  (cond
+    ((> f most-positive-long-float)
+     (list "Positive infinity."))
+    ((< f most-negative-long-float)
+     (list "Negative infinity."))
+    ((not (= f f))
+     (list "Not a Number."))
+    (t
+     (multiple-value-bind (significand exponent sign) (decode-float f)
+       (append
 	`("Scientific: " ,(format nil "~E" f) (:newline)
 			 "Decoded: "
 			 (:value ,sign) " * "
@@ -954,11 +1084,7 @@ SPECIAL-OPERATOR groups."
 			 (:value ,(float-radix f)) "^"
 			 (:value ,exponent) (:newline))
 	(label-value-line "Digits" (float-digits f))
-	(label-value-line "Precision" (float-precision f)))))
-    ((> f 0)
-     (list "Positive infinity."))
-    ((< f 0)
-     (list "Negative infinity."))))
+	(label-value-line "Precision" (float-precision f)))))))
 
 (defun make-pathname-ispec (pathname position)
   `("Pathname: "
@@ -992,7 +1118,7 @@ SPECIAL-OPERATOR groups."
                 (make-file-stream-ispec stream))
               content))))
 
-(defun common-seperated-spec (list &optional (callback (lambda (v)
+(defun comma-separated-spec (list &optional (callback (lambda (v)
                                                          `(:value ,v))))
   (butlast
    (loop

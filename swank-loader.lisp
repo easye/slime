@@ -133,6 +133,10 @@ operating system, and hardware architecture."
           (version (maybe-warn (lisp-version-string)
                                "Don't know how to get Lisp ~
                                 implementation version.")))
+      #+abcl
+      ;; alanr put where the rest of fasls go.
+      (namestring (merge-pathnames (make-pathname :directory '(:relative "slime")) uiop::*user-cache* ))
+      #-abcl
       (format nil "~(~@{~a~^-~}~)" lisp version os arch))))
 
 (defun file-newer-p (new-file old-file)
@@ -155,11 +159,14 @@ Return nil if nothing appropriate is available."
               return (subseq line (length prefix))))))
 
 (defun default-fasl-dir ()
+  #+abcl
+  (unique-dir-name)
+  #-abcl
   (merge-pathnames
    (make-pathname
     :directory `(:relative ".slime" "fasl"
-                 ,@(if (slime-version-string) (list (slime-version-string)))
-                 ,(unique-dir-name)))
+                           ,@(if (slime-version-string) (list (slime-version-string)))
+                           ,(unique-dir-name)))
    (user-homedir-pathname)))
 
 (defvar *fasl-directory* (default-fasl-dir)

@@ -141,6 +141,13 @@ CONTRIBS is a list of contrib packages to load. If `nil', use
 (defvar slime-protocol-version nil)
 (setq slime-protocol-version slime-version)
 
+(defvar slime-value-faces '(:blue 
+                            (t (:inherit slime-inspector-label-face :foreground "blue"))
+                            :dim
+                            (t (:inherit slime-inspector-label-face :foreground "grey")))
+  "A plist whose values are a faces and keys able to be used in (:styled-value <key> <value> <label>) parts
+e.g. '(:blue (t (:inherit slime-inspector-label-face :foreground \"blue\")))")
+
 
 ;;;; Customize groups
 ;;
@@ -3985,6 +3992,7 @@ WHAT can be:
   A filename (string),
   A list (:filename FILENAME &key LINE COLUMN POSITION),
   A function name (:function-name STRING)
+  A string (:string STRING)
   nil.
 
 This is for use in the implementation of COMMON-LISP:ED."
@@ -4003,7 +4011,13 @@ This is for use in the implementation of COMMON-LISP:ED."
                         (byte-to-position position)
                       position))))
       ((:function-name name)
-       (slime-edit-definition name)))))
+       (slime-edit-definition name))
+      ((:string string &optional buffer-name)
+       (with-output-to-temp-buffer (or buffer-name "*edit-string*")
+         (switch-to-buffer (or buffer-name "*edit-string*"))
+         (princ string)
+         (fundamental-mode)
+         (setq buffer-read-only nil))))))
 
 (defun slime-goto-line (line-number)
   "Move to line LINE-NUMBER (1-based).
@@ -4654,7 +4668,7 @@ This is used by `slime-goto-next-xref'")
 (defun slime-xref (type symbol &optional continuation)
   "Make an XREF request to Lisp."
   (slime-eval-async
-      `(swank:xref ',type ',symbol)
+      `(swank:xref ',type ',symbol ,(get-text-property (point) 'slime-part-number))
     (slime-rcurry (lambda (result type symbol package cont)
                     (slime-check-xref-implemented type result)
                     (let* ((_xrefs (slime-postprocess-xrefs result))
@@ -6458,6 +6472,10 @@ If PREV resp. NEXT are true insert more-buttons as needed."
                  'mouse-face 'highlight
                  'face 'slime-inspector-value-face)
          (insert string)))
+      ((:styled-value style  string id )
+       (let ((face (or (getf slime-value-faces style) 'slime-inspector-value-face)))
+         (slime-insert-propertized `(slime-part-number ,id mouse-face highlight face ,face)
+           string)))
       ((:label string)
        (insert (slime-inspector-fontify label string)))
       ((:action string id)

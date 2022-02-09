@@ -111,7 +111,7 @@
 (defclass standard-slot-definition ()())
 
 (defun slot-definition-documentation (slot)
-  (declare (ignore slot))
+  (declare (ignorable slot))
   #+abcl-introspect
   (documentation slot 't))
 
@@ -216,6 +216,7 @@
   :spawn)
 
 (defimplementation create-socket (host port &key backlog)
+  (declare (ignore host backlog))
   (ext:make-server-socket port))
 
 (defimplementation local-port (socket)
@@ -364,7 +365,6 @@
 
 (defimplementation collect-macro-forms (form &optional env)
   ;; Currently detects only normal macros, not compiler macros.
-  (declare (ignore env))
   (with-collected-macro-forms (macro-forms)
       (handler-bind ((warning #'muffle-warning))
         (ignore-errors
@@ -517,7 +517,7 @@
                   (format stream "(#~s ~{~s~^~})" (second form) (list* (third  form) (fourth form)))
                   (loop initially  (write-char #\( stream)
                         for (el . rest) on form
-                        for method =  (swank/abcl::matches-jss-call el)
+                        for method =  (matches-jss-call el)
                         do
                            (cond (method 
                                   (format stream "(#~s ~{~s~^~})" method (cdr el)))
@@ -543,31 +543,69 @@
    (multiple-value-list
     (jvm::parse-lambda-list (ext:arglist operator)))
    values))
-  
+
+;; Switch to enable or disable locals functionality
+(defvar *enable-locals* t)
+
+(defun are-there-locals? (frame index)
+  (and *enable-locals*
+       (fboundp 'sys::find-locals)
+       (typep frame 'sys::lisp-stack-frame)
+       (let ((operator (jss::get-java-field (nth-frame index) "operator" t)))
+         (and  (function-lambda-expression (if (functionp operator) operator (symbol-function operator)))
+               (not (member operator '(java::jcall java::jcall-static))) ;; WTF, length is an interpreted function??
+               (if (symbolp operator)
+                   (not (eq (symbol-package operator) (find-package 'cl)))
+                   t)))))
+
 (defimplementation frame-locals (index)
-  (let ((frame (nth-frame index)))
+  (let ((frame (nth-frame index))
+        ;;(id -1)
+        )
     ;; FIXME introspect locals in SYS::JAVA-STACK-FRAME
-    (when (typep frame 'sys::lisp-stack-frame) 
-       (loop
-          :for id :upfrom 0
-          :with frame = (nth-frame-list index)
-          :with operator = (first frame)
-          :with values = (rest frame)
-          :with arglist = (if (and operator (consp values) (not (null values)))
-                              (handler-case (match-lambda operator values)
-                                (jvm::lambda-list-mismatch (e) (declare(ignore e))
-                                  :lambda-list-mismatch))
-                              :not-available)
-          :for value :in values
-          :collecting (list
-                       :name (if (not (keywordp arglist))
-                                 (first (nth id arglist))
-                                 (format nil "arg~A" id))
-                       :id id
-                       :value value)))))
+    (or (and (are-there-locals? frame index)
+             (let ((locals (sys::find-locals index (backtrace 0 (1+ index)))))
+               (let ((argcount (length (cdr (nth-frame-list index))))
+                     (them 
+                       (let ((operator (jss::get-java-field (nth-frame index) "operator" t)))
+                         (let* ((env (and (jss::jtypep operator 'lisp.closure) (jss::get-java-field operator "environment" t)))
+                                (closed-count (if env (length (sys::environment-parts env)) 0)))
+                           (declare (ignore closed-count))
+                                        ; FIXME closed-over are in parts but also in locals
+                                        ; FIXME closed-over are in compiled functions to but are value of internal field
+                                        ; environment is the enviromnet of 
+                           (loop for (kind symbol value) in (caar locals)
+                                 when (eq kind :lexical-variable)
+                                        ; FIXME should I qualify each by whether arg, closed-over, let-bound?
+                                   collect (list :name symbol 
+                                                 :id 0        
+                                                 :value value))))))
+                 (declare (ignore argcount))
+                 (reverse them))))
+    ;; locals not available, fallback to original
+    (loop
+      :with frame = (nth-frame-list index)
+      :with operator = (first frame)
+      :with values = (rest frame)
+      :with arglist = (if (and operator (consp values) (not (null values)))
+                          (handler-case (match-lambda operator values)
+                            (jvm::lambda-list-mismatch (e) (declare(ignore e))
+                              :lambda-list-mismatch))
+                          :not-available)
+      :for value :in values
+      for id from 0
+      :collecting (list 
+                   :name (if (not (keywordp arglist)) ;; FIXME: WHat does this do?
+                             (format nil "arg-~a" (first (nth id arglist)))
+                             (format nil "arg~A" id))
+                   :id 0 ;; FIXME how is id supposed to be used
+                   :value value))
+    )))
 
 (defimplementation frame-var-value (index id)
- (elt (rest (jcall "toLispList" (nth-frame index))) id))
+  (if (are-there-locals? (nth-frame index) index)
+      (third (nth id (reverse (remove :lexical-variable (caar (sys::find-locals index (backtrace 0 (1+ index)))) :test-not 'eq :key 'car))))
+      (elt (rest (jcall "toLispList" (nth-frame index))) id)))
 
 #+abcl-introspect
 (defimplementation disassemble-frame (index)
@@ -652,10 +690,53 @@
                                (format nil "(~S () ~A)" 'lambda string))))
         t))))
 
+(defun system-property (name)
+  (jstatic "getProperty" "java.lang.System" name))
+
+(defun path-separator ()
+  (jfield "java.io.File" "pathSeparator"))
+
+(defun split-string (string regexp)
+  (coerce
+   (jcall (jmethod "java.lang.String" "split" "java.lang.String")
+               string regexp)
+   'list))
+
+(defun pathname-parent (pathname)
+  (make-pathname :directory (butlast (pathname-directory pathname))))
+
+(defun jdk-source-path ()
+  (let* ((jre-home (truename (system-property "java.home")))
+         (src-zip (merge-pathnames "src.zip" (pathname-parent jre-home)))
+         (truename (probe-file src-zip)))
+    (and truename (list truename))))
+
+
+(defun search-path-property (prop-name)
+  (let ((string (system-property prop-name)))
+    (and string
+         (remove nil
+                 (mapcar #'truename
+                         (split-string string (path-separator)))))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; source location and users of it
 
 (defgeneric source-location (object))
+
+(defvar *source-path*
+  (remove nil 
+          (append 
+           (get :swank-abcl-source-path :path) ;; so this can be set in .abclrc, before *source-path* exists
+           (search-path-property "user.dir")
+           (jdk-source-path)
+           ;; include lib jar files. contrib has lisp code. Would be good to build abcl.jar with source code as well
+           #+abcl-introspect
+           (list (sys::find-system-jar)
+                 (sys::find-contrib-jar))))
+  ;; you should tell slime where the abcl sources are. In .swank.lisp I have:
+  ;; (push (probe-file "/Users/alanr/repos/abcl/src/") *SOURCE-PATH*)
+  "List of directories to search for source files.")
 
 ;; try to find some kind of source for internals
 #+abcl-introspect
@@ -675,7 +756,7 @@
                   (split-string classname "\\$")
                   (list classname (jcall "replaceFirst" classname "([^.]*\\.)*" "")))
             (unless (member local '("MacroObject" "CompiledClosure" "Closure") :test 'equal)
-            ;; look for java source
+              ;; look for java source
               (let* ((partial-path   (substitute #\/ #\. class))
                      (java-path (concatenate 'string partial-path ".java"))
                      (found-in-source-path (find-file-in-path java-path *source-path*))) 
@@ -694,7 +775,7 @@
                     ;; with jad <https://github.com/moparisthebest/jad>
                     ;; Also (setq sys::*disassembler* "jad -a -p")
                     (let ((class-in-source-path 
-                           (find-file-in-path (concatenate 'string partial-path ".class") *source-path*)))
+                            (find-file-in-path (concatenate 'string partial-path ".class") *source-path*)))
                       ;; no snippet, since internal class is in its own file
                       (when class-in-source-path
                         `(:primitive (:location ,class-in-source-path (:line 0) nil)))))))))))))
@@ -743,10 +824,19 @@
                  do (return-from if-we-have-to-choose-one-choose-the-function spec))
       (car sources)))
 
+(defimplementation find-source-location (object)
+  (or (source-location object)
+      `(:error ,(format nil "Don't know how to find ~a" object))
+      ))
+    
+    
+(defmethod source-location ((anything t))
+  nil)
+
 (defmethod source-location ((symbol symbol))
   (or #+abcl-introspect
       (let ((maybe (if-we-have-to-choose-one-choose-the-function (get symbol 'sys::source))))
-        (and maybe (second (slime-location-from-source-annotation symbol maybe))))
+        (and maybe (second (car (slime-location-from-source-annotation symbol maybe))))) ;; FIXME slime-location-from-source-annotation returns a list now
       ;; This below should be obsolete - it uses the old sys:%source
       ;; leave it here for now just in case
       (and (pathnamep (ext:source-pathname symbol))
@@ -768,14 +858,14 @@
                     `(:location
                       (:buffer ,(pathname-name (ext:source-pathname symbol)))
                       (:function-name ,(string symbol))
-                      (:align t)))
+                      (:align nil)))
                    (t
                     `(:location
                       (:file ,path)
                       ,(if pos
                            (list :position (1+ pos))
                            (list :function-name (string symbol)))
-                      (:align t))))))
+                      (:align nil))))))
       #+abcl-introspect
       (second (implementation-source-location symbol))))
 
@@ -810,60 +900,20 @@
 (defmethod source-location ((method method))
   #+abcl-introspect
   (let ((found 
-         (find `(:method ,@(sys::method-spec-list method))
-               (get (function-name method) 'sys::source)
-               :key 'car :test 'equalp)))
-    (and found (second (slime-location-from-source-annotation (function-name method) found))))
+          (find `(:method ,@(sys::method-spec-list method))
+                (get (function-name method) 'sys::source)
+                :key 'car :test 'equalp)))
+    (and found (second (first (slime-location-from-source-annotation (function-name method) found)))))
   #-abcl-introspect
   (let ((name (function-name fun)))
     (and name (source-location name))))
 
-(defun system-property (name)
-  (jstatic "getProperty" "java.lang.System" name))
-
-(defun pathname-parent (pathname)
-  (make-pathname :directory (butlast (pathname-directory pathname))))
-
 (defun pathname-absolute-p (pathname)
   (eq (car (pathname-directory pathname)) ':absolute))
-
-(defun split-string (string regexp)
-  (coerce
-   (jcall (jmethod "java.lang.String" "split" "java.lang.String")
-               string regexp)
-   'list))
-
-(defun path-separator ()
-  (jfield "java.io.File" "pathSeparator"))
-
-(defun search-path-property (prop-name)
-  (let ((string (system-property prop-name)))
-    (and string
-         (remove nil
-                 (mapcar #'truename
-                         (split-string string (path-separator)))))))
-
-(defun jdk-source-path ()
-  (let* ((jre-home (truename (system-property "java.home")))
-         (src-zip (merge-pathnames "src.zip" (pathname-parent jre-home)))
-         (truename (probe-file src-zip)))
-    (and truename (list truename))))
 
 (defun class-path ()
   (append (search-path-property "java.class.path")
           (search-path-property "sun.boot.class.path")))
-
-(defvar *source-path*
-  (remove nil 
-          (append (search-path-property "user.dir")
-                  (jdk-source-path)
-                  ;; include lib jar files. contrib has lisp code. Would be good to build abcl.jar with source code as well
-                  #+abcl-introspect
-                  (list (sys::find-system-jar)
-                        (sys::find-contrib-jar))))
-                  ;; you should tell slime where the abcl sources are. In .swank.lisp I have:
-                  ;; (push (probe-file "/Users/alanr/repos/abcl/src/") *SOURCE-PATH*)
-"List of directories to search for source files.")
 
 (defun zipfile-contains-p (zipfile-name entry-name)
   (let ((zipfile (jnew (jconstructor "java.util.zip.ZipFile"
@@ -879,7 +929,9 @@
   (labels ((try (dir)
              (cond ((not (pathname-type dir))
                     (let ((f (probe-file (merge-pathnames filename dir))))
-                      (and f `(:file ,(namestring f)))))
+                      (if (and f (ext:pathname-jar-p f))
+                          `(:zip ,@(split-string (subseq (namestring f) (length "jar:file:")) "!/"))
+                          (and f `(:file ,(namestring f))))))                   
                    ((member (pathname-type dir) '("zip" "jar") :test 'equal)
                     (try-zip dir))
                    (t (error "strange path element: ~s" path))))
@@ -954,6 +1006,29 @@
   (let ((srcloc (source-location symbol)))
     (and srcloc `((,symbol ,srcloc)))))
 
+(defun definition-source-if-a-system (symbol)
+  (let* ((name (string-downcase (string symbol)))
+         (system (asdf::find-system name nil)))
+    (if system
+        (let ((source (namestring (slot-value system 'asdf::source-file)))
+              (snippet (format nil "defsystem ~a" name)))
+          (let* ((file-system-alternative (and (typep (pathname source) 'ext::jar-pathname)
+                                               (jar-location-in-file-system-too (pathname source))))
+                 (choices
+                   `(,@(when file-system-alternative
+                         (list (list `(:system ,symbol)
+                                     `(:location
+                                       ,file-system-alternative
+                                       ;; pos never seems right. Use function name.
+                                       (:line 0)
+                                       (:snippet ,snippet)))))
+                     `((:system ,symbol) (:location (:file ,source) (:line 0) (:snippet ,snippet))))))
+            (ecase *when-in-file-system-and-jar-choose* 
+              (:both choices)
+              (:filesystem (list (first choices)))
+              (:jar (list (second choices))))
+                   )))))
+
 #+abcl-introspect
 (defimplementation find-definitions (symbol)
   (when (stringp symbol) 
@@ -975,70 +1050,117 @@
                      (i-fun  (implementation-source-location sym)))
                  (when source
                    (setq sources (append sources (or (get sym 'ext::source) (get sym 'sys::source)))))
-                 (when i-var
+                 (when (and i-var (not (or source i-fun)))
                    (push i-var implementation-variables))
                  (when i-fun
-                   (push i-fun implementation-functions))))
+                   (push i-fun implementation-functions))
+                 ))
     (setq sources (remove-duplicates sources :test 'equalp))
     (append (remove-duplicates implementation-functions :test 'equalp)
-            (mapcar (lambda(s) (slime-location-from-source-annotation symbol s)) sources)
-            (remove-duplicates implementation-variables :test 'equalp))))
+            (mapcan (lambda(s) (slime-location-from-source-annotation symbol s)) sources)
+            (remove-duplicates implementation-variables :test 'equalp)
+            (definition-source-if-a-system symbol)
+            )))
+
+(defvar *when-in-file-system-and-jar-choose* :filesystem
+  "Source for ABCL may be in jar file and in file system as well. This variables chooses whether 
+to show both of them as locations (:both) just the filesystem (:filesystem) or just the jar (:jar)")
+
+;; if a jar file source is also found on the file system, return the filesystem as (:file <path>)
+(defun jar-location-in-file-system-too (jar)
+  (let ((source (pathname jar)))
+    (when source
+      (if (typep source 'ext::jar-pathname)
+          (let* ((jar (namestring (car (pathname-device source))))
+                 (system-jar (namestring (sys::find-system-jar)))
+                 (adjusted (subseq system-jar 4 (- (length system-jar) 2))))
+            (and (equal adjusted jar)
+                 (let ((found 
+                         (find-file-in-path
+                          (namestring (make-pathname :directory (substitute :relative :absolute (pathname-directory source))
+                                                     :name (pathname-name source) 
+                                                     :type (pathname-type source))
+                                      )
+                          *source-path*)))
+                   (if (and (consp found) (eq (car found) :file) (probe-file (second found)))
+                       found))))))))
 
 (defun slime-location-from-source-annotation (sym it)
   (destructuring-bind (what path pos) it
-
     (let* ((isfunction
-            ;; all of these are (defxxx forms, which is what :function locations look for in slime
-            (and (consp what) (member (car what)
-                                      '(:function :generic-function :macro :class :compiler-macro
-                                        :type :constant :variable :package :structure :condition))))
+             ;; all of these are (defxxx forms, which is what :function locations look for in slime
+             (and (consp what) (member (car what)
+                                       '(:function :generic-function :macro :class :compiler-macro
+                                         :type :constant :variable :package :structure :condition))))
            (ismethod (and (consp what) (eq (car what) :method)))
            (<position> (cond (isfunction (list :function-name (princ-to-string (second what))))
-                                             (ismethod (stringify-method-specs what))
-                                             (t (list :position (1+ (or pos 0))))))
+                             (ismethod (stringify-method-specs what))
+                             (t (list :position (1+ (or pos 0))))))
 
            (path2 (if (eq path :top-level)
-                      ;; this is bogus - figure out some way to guess which is the repl associated with :toplevel
-                      ;; or get rid of this
-                      "emacs-buffer:*slime-repl*"
+                      (format nil "emacs-buffer:~a"  (swank:eval-in-emacs `(buffer-name (slime-repl-buffer))))
+                      ;; catch below and use a snippet against the current repl.
                       (maybe-redirect-to-jar path))))
       (when (atom what)
         (setq what (list what sym)))
-      (list (definition-specifier what)
-            (if (ext:pathname-jar-p path2)
-                `(:location
-                  (:zip ,@(split-string (subseq path2 (length "jar:file:")) "!/"))
-                  ;; pos never seems right. Use function name.
-                  ,<position>
-                  (:align t))
-                ;; conspire with swank-compile-string to keep the
-                ;; buffer name in a pathname whose device is
-                ;; "emacs-buffer".
-                  (if (eql 0 (search "emacs-buffer:" path2))
-                      `(:location
-                        (:buffer ,(subseq path2  (load-time-value (length "emacs-buffer:"))))
-                        ,<position>
-                        (:align t))
-                      `(:location
-                        (:file ,path2)
-                        ,<position>
-                        (:align t))))))))
+      (let ((choices 
+              (list* (list (definition-specifier what)
+                           (if (ext:pathname-jar-p (pathname path2))
+                               `(:location
+                                 (:zip ,@(split-string (subseq path2 (length "jar:file:")) "!/"))
+                                 ;; pos never seems right. Use function name.
+                                 ,<position>
+                                 ;; Here an elsewhere don't use :align t, as it breaks too often, e.g. while editing but not finished.
+                                 (:align nil))
+                               ;; conspire with swank-compile-string to keep the
+                               ;; buffer name in a pathname whose device is
+                               ;; "emacs-buffer".
+                               (if (eql 0 (search "emacs-buffer:" path2))
+                                   `(:location 
+                                     (:buffer ,(subseq path2  (load-time-value (length "emacs-buffer:"))))
+                                     ;; really should search from bottom up, but fix that another time
+                                     (:line 0)
+                                     (:snippet ,(string-downcase (format nil "~a ~a" (first (definition-specifier what))
+                                                                         (second (definition-specifier what)))))
+                                     )
+                                   `(:location
+                                     (:file ,path2)
+                                     ,<position>
+                                     (:align nil)))))
+                     (when (ext:pathname-jar-p (pathname path2))
+                       (let ((file-system-alternative (jar-location-in-file-system-too (pathname path2))))
+                         (when file-system-alternative
+                           (list (list (definition-specifier what)
+                                       `(:location
+                                         ,file-system-alternative
+                                         ;; pos never seems right. Use function name.
+                                         ,<position>
+                                         (:align nil)))))
+                         )))))
+        (if (= (length choices) 2)
+            (ecase *when-in-file-system-and-jar-choose* 
+              (:both choices)
+              (:filesystem (list (second choices)))
+              (:jar (list (first choices))))
+            choices))
+      )))
 
 #+abcl-introspect
 (defimplementation list-callers (thing)
+  (remove-duplicates
   (loop for caller in (sys::callers thing)
         when (typep caller 'method)
           append (let ((name (mop:generic-function-name
                               (mop:method-generic-function caller))))
-                   (mapcar (lambda(s) (slime-location-from-source-annotation thing s))
+                   (mapcan (lambda(s) (slime-location-from-source-annotation caller s))
                            (remove `(:method ,@(sys::method-spec-list caller))
                                    (get 
                                     (if (consp name) (second name) name)
                                     'sys::source)
                                    :key 'car :test-not 'equalp)))
         when (symbolp caller)
-          append   (mapcar (lambda(s) (slime-location-from-source-annotation caller s))
-                           (get caller 'sys::source))))
+          append   (mapcan (lambda(s) (slime-location-from-source-annotation caller s))
+                           (get caller 'sys::source))) :test 'equalp))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Inspecting
@@ -1063,6 +1185,31 @@
 ;;; case, so make its computation a user interaction.
 (defparameter *to-string-hashtable* (make-hash-table :weakness :key))
 
+;; ****************
+;; Offer to inspect as java object
+
+(defvar *inspect-as-java-object*)
+
+(defmethod emacs-inspect :around ((o t))
+  (if (boundp '*inspect-as-java-object*)
+      (if (jinstance-of-p o (jclass "java.lang.Class"))
+          (emacs-inspect-java-class o)
+          (emacs-inspect-java-object o))
+      (let* ((usual (call-next-method))
+             (lcons? (typep usual 'swank::lcons))
+             (action `(:action "[Inspect as java object]" 
+                                               ,(lambda()(let ((*inspect-as-java-object* t))
+                                                           (inspect o)
+                                                           nil)) :refreshp nil)))
+        (if (not (java-object-p o))
+            (if lcons?
+                (swank::lcons action
+                       (swank::lcons '(:newline) usual))
+                (cons action (cons '(:newline) usual)))
+            usual))))
+          
+;;****************
+
 (defmethod emacs-inspect ((o t))
   (let* ((type (type-of o))
          (class (ignore-errors (find-class type)))
@@ -1078,9 +1225,15 @@
                              (list :label (string-capitalize label))
                              ": "
                              (list :value value (princ-to-string value)) '(:newline)))
-              (list '(:label "No inspectable parts, dumping output of CL:DESCRIBE:")
+              (list* '(:label "No inspectable parts, dumping output of CL:DESCRIBE:")
                     '(:newline)
-                    (with-output-to-string (desc) (describe o desc))))))))
+                    (with-output-to-string (desc) (describe o desc))
+                    '(:label "--------------")
+                    '(:newline)
+                    '(:label "As JAVA object") 
+                    '(:newline)
+                    (emacs-inspect-java-object o)
+                    ))))))
 
 (defmethod emacs-inspect ((string string))
   (swank::lcons* 
@@ -1092,7 +1245,7 @@
        `(:line "Names java class" ,(jclass string))
        "")
    #+abcl-introspect
-   (if (and (jss-p) 
+   (if (and (jss-p)  (< (length string) 100)
             (stringp (funcall (intern "LOOKUP-CLASS-NAME" :jss) string :return-ambiguous t :muffle-warning t)))
        `(:multiple
          (:label "Abbreviates java class: ")
@@ -1129,6 +1282,26 @@
                         (jcall "printStackTrace" (java:java-exception-cause o) (jnew "java.io.PrintWriter" w))
                         (jcall "toString" w)))))
 
+
+
+(defmethod emacs-inspect ((o system::environment))
+  (let ((parts (sys::environment-parts o)))
+    (let ((lexicals (mapcar 'cdr (remove :lexical-variable parts :test-not 'eq :key 'car)))
+	  (specials (mapcar 'cdr (remove :special parts :test-not 'eq :key 'car)))
+	  (functions (mapcar 'cdr (remove :lexical-function parts :test-not 'eq :key 'car))))
+       `(,@(if lexicals  
+	       (list* '(:label "Lexicals:") '(:newline) 
+		      (loop for (var value) in lexicals 
+			    append `("  " (:label ,(format nil "~s" var)) ": " (:value ,value) (:newline)))))
+	 ,@(if functions  
+	       (list* '(:label "Functions:") '(:newline)
+		      (loop for (var value) in functions 
+			    append `("  "(:label ,(format nil "~s" var)) ": " (:value ,value) (:newline)))))
+	 ,@(if specials  
+	       (list* '(:label "Specials:") '(:newline) 
+		      (loop for (var value) in specials 
+			    append `("  " (:label ,(format nil "~s" var)) ": " (:value ,value) (:newline)))))))))
+
 (defmethod emacs-inspect ((slot mop::slot-definition))
   `("Name: "
     (:value ,(mop:slot-definition-name slot))
@@ -1148,7 +1321,9 @@
 (defmethod emacs-inspect ((f function))
   `(,@(when (function-name f)
         `((:label "Name: ")
-          ,(princ-to-string (sys::any-function-name f)) (:newline)))
+          ,(princ-to-string (sys::any-function-name f)) ))
+    ,@(swank::disassemble-action f)
+    (:newline)
       ,@(multiple-value-bind (args present) (sys::arglist f)
           (when present
             `((:label "Argument list: ")
@@ -1181,13 +1356,17 @@
           (when (plusp (length fields))
             (list* '(:label "Internal fields: ") '(:newline)
                    (loop for field across fields
-                      do (jcall "setAccessible" field t) ;;; not a great idea esp. wrt. Java9
+                         for cant-access = (second (multiple-value-list (ignore-errors (jcall "setAccessible" field t))))
+;                      do (jcall "setAccessible" field t) ;;; not a great idea esp. wrt. Java9
                       append
                         (let ((value (jcall "get" field f)))
                           (list "  "
                                 `(:label ,(jcall "getName" field))
                                 ": "
-                                `(:value ,value ,(princ-to-string value))
+                                (if cant-access 
+                                    '(:styled-value :dim :inaccessible) 
+                                    `(:value ,value 
+                                             ,(maybe-with-prefixed-symbol value)))
                                 '(:newline)))))))
       #+abcl-introspect
       ,@(when (and (function-name f) (symbolp (function-name f))
@@ -1196,6 +1375,19 @@
                                   (lambda () (hyperspec-do (symbol-name (function-name f))))
                                   :refreshp nil)
                 '(:newline)))))
+
+(defun maybe-with-prefixed-symbol (thing)
+  (if (symbolp thing)
+      (let ((*print-case* :downcase))
+        (if (eq (symbol-package thing) *package*)
+            (princ-to-string thing)
+            (if (eq (symbol-package thing) swank::keyword-package)
+                (prin1-to-string thing)
+                (format nil "~a~a~a" (string-downcase (swank::shortest-package-name (symbol-package thing)))
+                        (if (swank::symbol-external-p thing) ":" "::")
+                        thing)))
+        (prin1-to-string thing))))
+                    
 
 (defmethod emacs-inspect ((o java:java-object))
   (if (jinstance-of-p o (jclass "java.lang.Class"))
@@ -1220,13 +1412,14 @@
      for fields
        = (sort (jcall "getDeclaredFields" super) 'string-lessp :key (lambda(x) (jcall "getName" x)))
      for fromline
-       = nil then (list `(:label "From: ") `(:value ,super  ,(jcall "getName" super)) '(:newline))
+       = nil then (list `(:label "From: ") `(:styled-value :blue ,super  ,(jcall "getName" super)) '(:newline))
      when (and (plusp (length fields)) fromline)
      append fromline
      append
        (loop for this across fields
-          for value = (jcall "get" (progn (jcall "setAccessible" this t) this) object)
-          for line = `("  " (:label ,(jcall "getName" this)) ": " (:value ,value) (:newline))
+             for cant-access = (second (multiple-value-list (ignore-errors (jcall "setAccessible" this t))))
+          for value = (unless cant-access (jcall "get" this object))
+          for line = `("  " (:label ,(jcall "getName" this)) ": " ,(if cant-access '(:styled-value :dim :inaccessible) `(:value ,value)) (:newline))
           if (static-field? this)
           append line into statics
           else append line into members
@@ -1281,7 +1474,7 @@
      for fields
        = (jcall "getDeclaredFields" super)
      for fromline
-       = nil then (list `(:label "From: ") `(:value ,super  ,(jcall "getName" super)) '(:newline))
+       = nil then (list `(:label "From: ") `(:styled-value :blue ,super  ,(jcall "getName" super)) '(:newline))
      when (and (plusp (length fields)) fromline)
      append fromline
      append
@@ -1291,7 +1484,7 @@
                             (1+ (position #\. (jcall "toString" this)  :from-end t)))
           collect "  "
           collect (list :value this pre)
-          collect (list :value this (jcall "getName" this) )
+          collect (list :styled-value :blue this (jcall "getName" this) )
           collect '(:newline))))
 
 (defun inspector-java-methods (class)
@@ -1302,7 +1495,7 @@
      for methods
        = (jcall "getDeclaredMethods" super)
      for fromline
-       = nil then (list `(:label "From: ") `(:value ,super  ,(jcall "getName" super)) '(:newline))
+       = nil then (list `(:label "From: ") `(:styled-value :blue ,super  ,(jcall "getName" super)) '(:newline))
      when (and (plusp (length methods)) fromline)
      append fromline
      append
@@ -1315,22 +1508,35 @@
           for after = (subseq desc paren)
           collect "  "
           collect (list :value this pre)
-          collect (list :value this name)
+          collect (list :styled-value :blue this name)
           collect (list :value this after)
           collect '(:newline))))
+
+(defun inspector-java-constructors (class)
+  (loop
+    for this across (jcall "getConstructors" class)
+    for desc = (jcall "toString" this)
+    for paren =  (position #\( desc)
+    for dot = (or (position #\. (subseq desc 0 paren) :from-end t) (position #\space (subseq desc 0 paren) :from-end t) 0)
+    for name = (subseq desc (1+ dot) paren)
+    for after = (subseq desc paren)
+    collect "  "
+    collect (list :styled-value :blue this name)
+    collect (list :value this after)
+    collect '(:newline)))
 
 (defun emacs-inspect-java-class (class)
   (let ((has-superclasses (jclass-superclass class))
         (has-interfaces (plusp (length (jclass-interfaces class))))
         (fields (inspector-java-fields class))
-        (path (jcall "replaceFirst"
+        (path (ignore-errors (jcall "replaceFirst"
                      (jcall "replaceFirst"  
                             (jcall "toString" (jcall "getResource" 
                                                      class
                                                      (concatenate 'string
                                                                   "/" (substitute #\/ #\. (jcall "getName" class))
                                                                   ".class")))
-                            "jar:file:" "") "!.*" "")))
+                            "jar:file:" "") "!.*" ""))))
     `((:label ,(format nil "Java Class: ~a" (jcall "getName" class) ))
       (:newline)
       ,@(when path (list `(:label ,"Loaded from: ")
@@ -1343,7 +1549,10 @@
       ,@(if has-interfaces
             (list* '(:newline) '(:label "Implements Interfaces: ")
                    (butlast (loop for i across (jclass-interfaces class) collect (list :value i (jcall "getName" i)) collect ", "))))
-      (:newline) (:label "Methods:") (:newline)
+      (:newline)
+      (:label "Constructors:") (:newline)
+      ,@(inspector-java-constructors class)
+      (:label "Methods:") (:newline)
       ,@(inspector-java-methods class)
       ,@(if fields
             (list*
@@ -1353,7 +1562,14 @@
 (defmethod emacs-inspect ((object sys::structure-object))
   `((:label "Type: ") (:value ,(type-of object)) (:newline)
     (:label "Class: ") (:value ,(class-of object)) (:newline)
-    ,@(inspector-structure-slot-names-and-values object)))
+    ,@(inspector-structure-slot-names-and-values object)
+    ,@(funcall (mop::method-function
+                (car
+                 (compute-applicable-methods #'swank::emacs-inspect (list java::+null+))
+                 ))
+               (list object)
+               (lambda(&rest args) (declare (ignore args))))
+    ))
 
 (defun inspector-structure-slot-names-and-values (structure)
   (let ((structure-def (get (type-of structure) 'system::structure-definition)))
@@ -1394,7 +1610,7 @@
               collect '(:newline)))))))
 
 (defun parts-for-structure-def-slot (def)
-  `((:label ,(string-downcase (sys::dsd-name def))) " reader: " (:value ,(sys::dsd-reader def) ,(string-downcase (string (sys::dsdreader def))))
+  `((:label ,(string-downcase (sys::dsd-name def))) " reader: " (:value ,(sys::dsd-reader def) ,(string-downcase (string (sys::dsd-reader def))))
     ", index: " (:value ,(sys::dsd-index def))
     ,@(if (sys::dsd-initform def)
           `(", initform: " (:value ,(sys::dsd-initform def))))
@@ -1449,8 +1665,61 @@
 (defimplementation thread-name (thread)
   (threads:thread-name thread))
 
+(defun in-sldb (thread) 
+  (block it
+    (loop with trace = (#"getStackTrace" (jss::get-java-field thread "javaThread" t))
+          with has-sldb-loop =  (find-if (lambda(el)
+                                          (eq (gethash (#"getClassName" el) sys::*function-class-names*)
+                                              #'swank::sldb-loop))
+                                        trace)
+          for el across trace
+          do (cond ((and (#"getFileName" el) (#"matches" (#"getFileName" el) "\\.lisp$"))
+                    (return-from it nil))
+                   ((not (#"getFileName" el))
+                    (if (and 
+                         (#"matches" (#"getClassName" el) "abcl_.*")
+                         (let ((lookup (gethash  (#"getClassName" el) system::*function-class-names*)))
+                           (and lookup
+                                (symbolp   (sys::any-function-name lookup))
+                                (equalp  (string (sys::any-function-name lookup)) "RECEIVE-IF")
+                                has-sldb-loop)))
+                        (return-from it t)
+                        (return-from it nil)))))))
+
+(defun debugger-emacs-buffer (thread)
+  (let ((it (swank::eval-in-emacs `(buffer-name (sldb-find-buffer ,(thread-id thread) (slime-connection))))))
+    (if (equal it " *cl-connection*")
+        "no sldb buffer"
+        it)))
+
+;; Alive or dead, if alive the java thread state and method at top of stack
 (defimplementation thread-status (thread)
-  (format nil "Thread is ~:[dead~;alive~]" (threads:thread-alive-p thread)))
+  (let* ((jthread  (jss::get-java-field thread "javaThread" t))
+         (stack (jcall "getStackTrace" jthread))
+         (state (jcall "name" (jcall "getState" jthread)))
+         (interrupted? (jss::get-java-field thread "threadInterrupted" t)))
+    (setq state (second (assoc state '(("TIMED_WAITING" "Sleeping")
+                                       ("RUNNABLE" "Running")
+                                       ("WAITING" "Idle")
+                                       ("TERMINATED" "Terminated")
+                                       ("BLOCKED" "Waiting for lock"))
+                               :test 'equalp)))
+    (format nil "~{~a~^, ~}"
+            (append
+             ;; (if (not alive?)
+             ;;     '("Dead"))
+             (if interrupted?
+                 '("Thread has pending interrupts"))
+             (if (in-sldb thread)
+                 (list "In debugger" (debugger-emacs-buffer thread))
+                 (list state))
+             (if (and (equalp state "Running") (plusp (length stack)))
+                 (let ((f (elt stack 0))) (list (format nil "~a.~a()"  (jcall "replaceFirst" (jcall "getClassName" f) ".*\\." "")
+                                                        (jcall "getMethodName" f))))
+                 )
+             ))))
+
+
 
 (defimplementation make-lock (&key name)
   (declare (ignore name))
