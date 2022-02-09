@@ -825,9 +825,14 @@
       (car sources)))
 
 (defimplementation find-source-location (object)
-  (source-location object))
+  (or (source-location object)
+      `(:error ,(format nil "Don't know how to find ~a" object))
+      ))
     
     
+(defmethod source-location ((anything t))
+  nil)
+
 (defmethod source-location ((symbol symbol))
   (or #+abcl-introspect
       (let ((maybe (if-we-have-to-choose-one-choose-the-function (get symbol 'sys::source))))
@@ -853,14 +858,14 @@
                     `(:location
                       (:buffer ,(pathname-name (ext:source-pathname symbol)))
                       (:function-name ,(string symbol))
-                      (:align t)))
+                      (:align nil)))
                    (t
                     `(:location
                       (:file ,path)
                       ,(if pos
                            (list :position (1+ pos))
                            (list :function-name (string symbol)))
-                      (:align t))))))
+                      (:align nil))))))
       #+abcl-introspect
       (second (implementation-source-location symbol))))
 
@@ -895,14 +900,13 @@
 (defmethod source-location ((method method))
   #+abcl-introspect
   (let ((found 
-         (find `(:method ,@(sys::method-spec-list method))
-               (get (function-name method) 'sys::source)
-               :key 'car :test 'equalp)))
-    (and found (second (slime-location-from-source-annotation (function-name method) found))))
+          (find `(:method ,@(sys::method-spec-list method))
+                (get (function-name method) 'sys::source)
+                :key 'car :test 'equalp)))
+    (and found (second (first (slime-location-from-source-annotation (function-name method) found)))))
   #-abcl-introspect
   (let ((name (function-name fun)))
     (and name (source-location name))))
-
 
 (defun pathname-absolute-p (pathname)
   (eq (car (pathname-directory pathname)) ':absolute))
@@ -1094,9 +1098,8 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
                              (t (list :position (1+ (or pos 0))))))
 
            (path2 (if (eq path :top-level)
-                      ;; this is bogus - figure out some way to guess which is the repl associated with :toplevel
-                      ;; or get rid of this
-                      "emacs-buffer:*slime-repl*"
+                      (format nil "emacs-buffer:~a"  (swank:eval-in-emacs `(buffer-name (slime-repl-buffer))))
+                      ;; catch below and use a snippet against the current repl.
                       (maybe-redirect-to-jar path))))
       (when (atom what)
         (setq what (list what sym)))
@@ -1107,19 +1110,23 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
                                  (:zip ,@(split-string (subseq path2 (length "jar:file:")) "!/"))
                                  ;; pos never seems right. Use function name.
                                  ,<position>
-                                 (:align t))
+                                 ;; Here an elsewhere don't use :align t, as it breaks too often, e.g. while editing but not finished.
+                                 (:align nil))
                                ;; conspire with swank-compile-string to keep the
                                ;; buffer name in a pathname whose device is
                                ;; "emacs-buffer".
                                (if (eql 0 (search "emacs-buffer:" path2))
-                                   `(:location
+                                   `(:location 
                                      (:buffer ,(subseq path2  (load-time-value (length "emacs-buffer:"))))
-                                     ,<position>
-                                     (:align t))
+                                     ;; really should search from bottom up, but fix that another time
+                                     (:line 0)
+                                     (:snippet ,(string-downcase (format nil "~a ~a" (first (definition-specifier what))
+                                                                         (second (definition-specifier what)))))
+                                     )
                                    `(:location
                                      (:file ,path2)
                                      ,<position>
-                                     (:align t)))))
+                                     (:align nil)))))
                      (when (ext:pathname-jar-p (pathname path2))
                        (let ((file-system-alternative (jar-location-in-file-system-too (pathname path2))))
                          (when file-system-alternative
@@ -1128,7 +1135,7 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
                                          ,file-system-alternative
                                          ;; pos never seems right. Use function name.
                                          ,<position>
-                                         (:align t)))))
+                                         (:align nil)))))
                          )))))
         (if (= (length choices) 2)
             (ecase *when-in-file-system-and-jar-choose* 
