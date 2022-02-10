@@ -543,31 +543,69 @@
    (multiple-value-list
     (jvm::parse-lambda-list (ext:arglist operator)))
    values))
-  
+
+;; Switch to enable or disable locals functionality
+(defvar *enable-locals* t)
+
+(defun are-there-locals? (frame index)
+  (and *enable-locals*
+       (fboundp 'sys::find-locals)
+       (typep frame 'sys::lisp-stack-frame)
+       (let ((operator (jss::get-java-field (nth-frame index) "operator" t)))
+         (and  (function-lambda-expression (if (functionp operator) operator (symbol-function operator)))
+               (not (member operator '(java::jcall java::jcall-static))) ;; WTF, length is an interpreted function??
+               (if (symbolp operator)
+                   (not (eq (symbol-package operator) (find-package 'cl)))
+                   t)))))
+
 (defimplementation frame-locals (index)
-  (let ((frame (nth-frame index)))
+  (let ((frame (nth-frame index))
+        ;;(id -1)
+        )
     ;; FIXME introspect locals in SYS::JAVA-STACK-FRAME
-    (when (typep frame 'sys::lisp-stack-frame) 
-       (loop
-          :for id :upfrom 0
-          :with frame = (nth-frame-list index)
-          :with operator = (first frame)
-          :with values = (rest frame)
-          :with arglist = (if (and operator (consp values) (not (null values)))
-                              (handler-case (match-lambda operator values)
-                                (jvm::lambda-list-mismatch (e) (declare(ignore e))
-                                  :lambda-list-mismatch))
-                              :not-available)
-          :for value :in values
-          :collecting (list
-                       :name (if (not (keywordp arglist))
-                                 (first (nth id arglist))
-                                 (format nil "arg~A" id))
-                       :id id
-                       :value value)))))
+    (or (and (are-there-locals? frame index)
+             (let ((locals (sys::find-locals index (backtrace 0 (1+ index)))))
+               (let ((argcount (length (cdr (nth-frame-list index))))
+                     (them 
+                       (let ((operator (jss::get-java-field (nth-frame index) "operator" t)))
+                         (let* ((env (and (jss::jtypep operator 'lisp.closure) (jss::get-java-field operator "environment" t)))
+                                (closed-count (if env (length (sys::environment-parts env)) 0)))
+                           (declare (ignore closed-count))
+                                        ; FIXME closed-over are in parts but also in locals
+                                        ; FIXME closed-over are in compiled functions to but are value of internal field
+                                        ; environment is the enviromnet of 
+                           (loop for (kind symbol value) in (caar locals)
+                                 when (eq kind :lexical-variable)
+                                        ; FIXME should I qualify each by whether arg, closed-over, let-bound?
+                                   collect (list :name symbol 
+                                                 :id 0        
+                                                 :value value))))))
+                 (declare (ignore argcount))
+                 (reverse them))))
+    ;; locals not available, fallback to original
+    (loop
+      :with frame = (nth-frame-list index)
+      :with operator = (first frame)
+      :with values = (rest frame)
+      :with arglist = (if (and operator (consp values) (not (null values)))
+                          (handler-case (match-lambda operator values)
+                            (jvm::lambda-list-mismatch (e) (declare(ignore e))
+                              :lambda-list-mismatch))
+                          :not-available)
+      :for value :in values
+      for id from 0
+      :collecting (list 
+                   :name (if (not (keywordp arglist)) ;; FIXME: WHat does this do?
+                             (format nil "arg-~a" (first (nth id arglist)))
+                             (format nil "arg~A" id))
+                   :id 0 ;; FIXME how is id supposed to be used
+                   :value value))
+    )))
 
 (defimplementation frame-var-value (index id)
- (elt (rest (jcall "toLispList" (nth-frame index))) id))
+  (if (are-there-locals? (nth-frame index) index)
+      (third (nth id (reverse (remove :lexical-variable (caar (sys::find-locals index (backtrace 0 (1+ index)))) :test-not 'eq :key 'car))))
+      (elt (rest (jcall "toLispList" (nth-frame index))) id)))
 
 #+abcl-introspect
 (defimplementation disassemble-frame (index)
@@ -1128,6 +1166,26 @@
                       (let ((w (jnew "java.io.StringWriter"))) 
                         (jcall "printStackTrace" (java:java-exception-cause o) (jnew "java.io.PrintWriter" w))
                         (jcall "toString" w)))))
+
+
+
+(defmethod emacs-inspect ((o system::environment))
+  (let ((parts (sys::environment-parts o)))
+    (let ((lexicals (mapcar 'cdr (remove :lexical-variable parts :test-not 'eq :key 'car)))
+	  (specials (mapcar 'cdr (remove :special parts :test-not 'eq :key 'car)))
+	  (functions (mapcar 'cdr (remove :lexical-function parts :test-not 'eq :key 'car))))
+       `(,@(if lexicals  
+	       (list* '(:label "Lexicals:") '(:newline) 
+		      (loop for (var value) in lexicals 
+			    append `("  " (:label ,(format nil "~s" var)) ": " (:value ,value) (:newline)))))
+	 ,@(if functions  
+	       (list* '(:label "Functions:") '(:newline)
+		      (loop for (var value) in functions 
+			    append `("  "(:label ,(format nil "~s" var)) ": " (:value ,value) (:newline)))))
+	 ,@(if specials  
+	       (list* '(:label "Specials:") '(:newline) 
+		      (loop for (var value) in specials 
+			    append `("  " (:label ,(format nil "~s" var)) ": " (:value ,value) (:newline)))))))))
 
 (defmethod emacs-inspect ((slot mop::slot-definition))
   `("Name: "
