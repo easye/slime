@@ -3827,7 +3827,28 @@ locations."
          (list original-xref))))))
 
 (defun slime-postprocess-xrefs (xrefs)
+  (setq xrefs (slime-remove-duplicated-buffer-and-file-xref xrefs))
   (cl-mapcan #'slime-postprocess-xref xrefs))
+
+;; if there's both a buffer for a file and the file as source, remove the :buffer 
+(defun slime-remove-duplicated-buffer-and-file-xref (xrefs)
+  (loop for xref in xrefs
+        for (name (nil (kind where))) = xref
+        unless (and (eq kind :buffer)
+                    (let ((filename (buffer-file-name (get-buffer where))))
+                      (message "file-name %s" filename)
+                      (message "file is %s" filename)
+                      (when (and filename (file-exists-p filename))
+                        (let ((true (file-truename filename)))
+                          (find-if (lambda(e)
+                                     (and (eq (car (second (second e))) :file)
+                                     (message "compare %s to %s" (file-truename (second (second (second e)))) true)
+
+                                          (equalp true
+                                                  (file-truename (second (second (second e)))))))
+                                    xrefs
+                                )))))
+        collect xref))
 
 (defun slime-find-definitions (name)
   "Find definitions for NAME."
@@ -6135,9 +6156,15 @@ was called originally."
 
 (defun slime-update-threads-buffer ()
   (interactive)
-  (with-current-buffer slime-threads-buffer-name
-    (slime-eval-async '(swank:list-threads)
-      'slime-display-threads)))
+  (when (null 
+         (ignore-errors ;; if we lose connection the thread update was still running
+           (with-current-buffer slime-threads-buffer-name
+             (slime-eval-async '(swank:list-threads)
+               'slime-display-threads)))
+         (when  (not (buffer-live-p slime-threads-buffer-timer ))
+           (cancel-timer slime-threads-buffer-timer)
+           (message "Error in slime-update-threads-buffer. Canceling update timer")
+           (setq slime-threads-buffer-timer nil)))))
 
 (defun slime-move-point (position)
   "Move point in the current buffer and in the window the buffer is displayed."
@@ -6383,11 +6410,16 @@ was called originally."
 
 (defvar slime-inspector-mark-stack '())
 
+(defcustom slime-inspect-default "*"
+  "What should slime fill in as thing to inspect if there isn't an sexp at point"
+    :group 'slime-inspector
+    :type 'string)
+
 (defun slime-inspect (string)
   "Eval an expression and inspect the result."
   (interactive
    (list (slime-read-from-minibuffer "Inspect value (evaluated): "
-				     (slime-sexp-at-point))))
+				     (or (slime-sexp-at-point) slime-inspect-default))))
   (slime-eval-async `(swank:init-inspector ,string) 'slime-open-inspector))
 
 (define-derived-mode slime-inspector-mode fundamental-mode
@@ -6417,19 +6449,21 @@ was called originally."
 Optionally set point to POINT. If HOOK is provided, it is added to local
 KILL-BUFFER hooks for the inspector buffer."
   (with-current-buffer (slime-inspector-buffer)
+    (visual-line-mode 1)
     (when hook
       (add-hook 'kill-buffer-hook hook t t))
     (setq slime-buffer-connection (slime-current-connection))
     (let ((inhibit-read-only t))
       (erase-buffer)
       (pop-to-buffer (current-buffer))
+      (font-lock-mode -1)
       (cl-destructuring-bind (&key id title content) inspected-parts
         (cl-macrolet ((fontify (face string)
                                `(slime-inspector-fontify ,face ,string)))
           (slime-propertize-region
               (list 'slime-part-number id
                     'mouse-face 'highlight
-                    'face 'slime-inspector-value-face)
+                    'face 'slime-inspector-topline-face)
             (insert title))
           (while (eq (char-before) ?\n)
             (backward-delete-char 1))
