@@ -1224,15 +1224,25 @@
      when (and (plusp (length fields)) fromline)
      append fromline
      append
-       (loop for this across fields
-          for value = (jcall "get" (progn (jcall "setAccessible" this t) this) object)
+     (loop for this across fields
+           ;;; openjdk17 suboptimal workaround for setAccessible() 
+             for value = (let ((result
+                                 (ignore-errors 
+                                  (jcall "get" (progn
+                                                 (ignore-errors (jcall "setAccessible" this t)) this)
+                                         object))))
+                           (if result
+                               result
+                               "Unavailable"))
           for line = `("  " (:label ,(jcall "getName" this)) ": " (:value ,value) (:newline))
           if (static-field? this)
           append line into statics
           else append line into members
           finally (return (append
-                           (if members `((:label "Member fields: ") (:newline) ,@members))
-                           (if statics `((:label "Static fields: ") (:newline) ,@statics)))))))
+                           (when members
+                             `((:label "Member fields: ") (:newline) ,@members))
+                           (when statics
+                             `((:label "Static fields: ") (:newline) ,@statics)))))))
 
 (defun emacs-inspect-java-object (object)
   (let ((to-string (lambda ()
