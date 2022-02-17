@@ -1467,50 +1467,60 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
                      (:newline)))
 
 (defun inspector-java-fields (class)
-  (loop
-     for super
-       = class then (jclass-superclass super)
-     while super
-     for fields
-       = (jcall "getDeclaredFields" super)
-     for fromline
-       = nil then (list `(:label "From: ") `(:styled-value :blue ,super  ,(jcall "getName" super)) '(:newline))
-     when (and (plusp (length fields)) fromline)
-     append fromline
-     append
-       (loop for this across fields
-          for pre = (subseq (jcall "toString" this)
-                            0 
-                            (1+ (position #\. (jcall "toString" this)  :from-end t)))
-          collect "  "
-          collect (list :value this pre)
-          collect (list :styled-value :blue this (jcall "getName" this) )
-          collect '(:newline))))
+  (let* ((classprefix (concatenate 'string (jclass-name class) "."))
+         ;; regex to be able to remove the class name from the field
+         (regex (format nil "((~a)*.*?)~a" classprefix  classprefix)))
+    (loop
+      for super
+        = class then (jclass-superclass super)
+      while super
+      for fields
+        = (jcall "getDeclaredFields" super)
+      for fromline
+        = nil then (list `(:label "From: ") `(:styled-value :blue ,super  ,(jcall "getName" super)) '(:newline))
+      when (and (plusp (length fields)) fromline)
+        append fromline
+      append
+      (loop for this across fields
+            ;; If it's a field on this class, then just show the field name
+            for pre = (jcall "replaceFirst" (subseq
+                                             (jcall "toString" this)
+                                             0 
+                                             (1+ (position #\. (jcall "toString" this)  :from-end t)))
+                             regex "$1")
+            collect "  "
+            collect (list :value this pre)
+            collect (list :styled-value :blue this (jcall "getName" this) )
+            collect '(:newline)))))
 
 (defun inspector-java-methods (class)
-  (loop
-     for super
-       = class then (jclass-superclass super)
-     while super
-     for methods
-       = (jcall "getDeclaredMethods" super)
-     for fromline
-       = nil then (list `(:label "From: ") `(:styled-value :blue ,super  ,(jcall "getName" super)) '(:newline))
-     when (and (plusp (length methods)) fromline)
-     append fromline
-     append
-       (loop for this across methods
-          for desc = (jcall "toString" this)
-          for paren =  (position #\( desc)
-          for dot = (position #\. (subseq desc 0 paren) :from-end t)
-          for pre = (subseq desc 0 dot)
-          for name = (subseq desc dot paren)
-          for after = (subseq desc paren)
-          collect "  "
-          collect (list :value this pre)
-          collect (list :styled-value :blue this name)
-          collect (list :value this after)
-          collect '(:newline))))
+  (let* ((classprefix (concatenate 'string (jclass-name class) "."))
+         ;; regex to be able to remove the class name from the method 
+         (regex (format nil "((~a)*.*?)~a" classprefix  classprefix)))
+    (loop
+      for super
+        = class then (jclass-superclass super)
+      while super
+      for methods
+        = (jcall "getDeclaredMethods" super)
+      for fromline
+        = nil then (list `(:label "From: ") `(:styled-value :blue ,super  ,(jcall "getName" super)) '(:newline))
+      when (and (plusp (length methods)) fromline)
+        append fromline
+      append
+      (loop for this across methods
+            for desc = (jcall "toString" this)
+            for paren =  (position #\( desc)
+            for dot = (position #\. (subseq desc 0 paren) :from-end t)
+            ;; If it's a method on this class, then just show the method name
+            for pre = (jcall "replaceFirst"  (subseq desc 0 (1+ dot)) regex "$1")
+            for name = (subseq desc (1+ dot) paren)
+            for after = (subseq desc paren)
+            collect "  "
+            unless (equal pre "") collect (list :value this pre)
+              collect (list :styled-value :blue this name)
+            collect (list :value this after)
+            collect '(:newline)))))
 
 (defun inspector-java-constructors (class)
   (loop
