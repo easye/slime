@@ -44,7 +44,8 @@
                           (require :abcl-introspect)
                           (find "ABCL-INTROSPECT" *modules* :test
                                 'equal))))
-    (pushnew :abcl-introspect *features*)))
+    (pushnew :abcl-introspect *features*))
+  )
 
 (defimplementation gray-package-name ()
   "GRAY-STREAMS")
@@ -1190,7 +1191,21 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
 
 (defvar *inspect-as-java-object*)
 
+(let ((done nil))
+  (defun maybe-setup-custom-styles ()
+    (unless done
+      (swank:eval-in-emacs '(progn 
+                             (pushnew '(:java-name
+                                        (:foreground "blue" :weight bold))
+                              slime-custom-inspector-faces
+                              :test  'equalp)
+                             (pushnew '(:inaccessible (:foreground "grey"))
+                              slime-custom-inspector-faces
+                              :test  'equalp)))
+      (setq done t))))
+
 (defmethod emacs-inspect :around ((o t))
+  (maybe-setup-custom-styles)
   (if (boundp '*inspect-as-java-object*)
       (if (jinstance-of-p o (jclass "java.lang.Class"))
           (emacs-inspect-java-class o)
@@ -1357,14 +1372,13 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
             (list* '(:label "Internal fields: ") '(:newline)
                    (loop for field across fields
                          for cant-access = (second (multiple-value-list (ignore-errors (jcall "setAccessible" field t))))
-;                      do (jcall "setAccessible" field t) ;;; not a great idea esp. wrt. Java9
                       append
                         (let ((value (jcall "get" field f)))
                           (list "  "
                                 `(:label ,(jcall "getName" field))
                                 ": "
                                 (if cant-access 
-                                    '(:styled-value :dim :inaccessible) 
+                                    '(:value :inaccessible ":inaccessible" :style :inaccessible) 
                                     `(:value ,value 
                                              ,(maybe-with-prefixed-symbol value)))
                                 '(:newline)))))))
@@ -1412,14 +1426,14 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
      for fields
        = (sort (jcall "getDeclaredFields" super) 'string-lessp :key (lambda(x) (jcall "getName" x)))
      for fromline
-       = nil then (list `(:label "From: ") `(:styled-value :blue ,super  ,(jcall "getName" super)) '(:newline))
+       = nil then (list `(:label "From: ") `(:value ,super  ,(jcall "getName" super) :style :java-name) '(:newline))
      when (and (plusp (length fields)) fromline)
      append fromline
      append
        (loop for this across fields
              for cant-access = (second (multiple-value-list (ignore-errors (jcall "setAccessible" this t))))
           for value = (unless cant-access (jcall "get" this object))
-          for line = `("  " (:label ,(jcall "getName" this)) ": " ,(if cant-access '(:styled-value :dim :inaccessible) `(:value ,value)) (:newline))
+          for line = `("  " (:label ,(jcall "getName" this)) ": " ,(if cant-access '(:value :inaccessible ":inaccessible" :style :inaccessible) `(:value ,value)) (:newline))
           if (static-field? this)
           append line into statics
           else append line into members
@@ -1477,7 +1491,7 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
       for fields
         = (jcall "getDeclaredFields" super)
       for fromline
-        = nil then (list `(:label "From: ") `(:styled-value :blue ,super  ,(jcall "getName" super)) '(:newline))
+        = nil then (list `(:label "From: ") `(:value ,super  ,(jcall "getName" super) :style  :java-name) '(:newline))
       when (and (plusp (length fields)) fromline)
         append fromline
       append
@@ -1490,13 +1504,13 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
                              regex "$1")
             collect "  "
             collect (list :value this pre)
-            collect (list :styled-value :blue this (jcall "getName" this) )
+            collect (list :value this (jcall "getName" this) :style  :java-name )
             collect '(:newline)))))
 
 (defun inspector-java-methods (class)
-  (let* ((classprefix (concatenate 'string (jclass-name class) "."))
+  (let* ((class-prefix (concatenate 'string (jclass-name class) "\\."))
          ;; regex to be able to remove the class name from the method 
-         (regex (format nil "((~a)*.*?)~a" classprefix  classprefix)))
+         )
     (loop
       for super
         = class then (jclass-superclass super)
@@ -1504,7 +1518,7 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
       for methods
         = (jcall "getDeclaredMethods" super)
       for fromline
-        = nil then (list `(:label "From: ") `(:styled-value :blue ,super  ,(jcall "getName" super)) '(:newline))
+        = nil then (list `(:label "From: ") `(:value  ,super  ,(jcall "getName" super) :style :java-name) '(:newline))
       when (and (plusp (length methods)) fromline)
         append fromline
       append
@@ -1513,12 +1527,12 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
             for paren =  (position #\( desc)
             for dot = (position #\. (subseq desc 0 paren) :from-end t)
             ;; If it's a method on this class, then just show the method name
-            for pre = (jcall "replaceFirst"  (subseq desc 0 (1+ dot)) regex "$1")
+            for pre = (jcall "replaceFirst"  (subseq desc 0 (1+ dot)) class-prefix "")
             for name = (subseq desc (1+ dot) paren)
             for after = (subseq desc paren)
             collect "  "
             unless (equal pre "") collect (list :value this pre)
-              collect (list :styled-value :blue this name)
+              collect (list :value this name :style :java-name)
             collect (list :value this after)
             collect '(:newline)))))
 
@@ -1531,7 +1545,7 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
     for name = (subseq desc (1+ dot) paren)
     for after = (subseq desc paren)
     collect "  "
-    collect (list :styled-value :blue this name)
+    collect (list :value  this name :style :java-name)
     collect (list :value this after)
     collect '(:newline)))
 
