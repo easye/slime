@@ -3160,6 +3160,10 @@ DSPEC is a string and LOCATION a source location. NAME is a string."
               (+ end 1000))
           start end)))
 
+;; 2022-02-17 alanr add styles
+;; (:value <value> <string> :style <style>)
+;; (:action <label> <lambda> :refreshp <> :style <style>)
+;; (:label :style <style> &rest strings)
 (defun prepare-part (part istate)
   (let ((newline '#.(string #\newline)))
     (etypecase part
@@ -3168,27 +3172,32 @@ DSPEC is a string and LOCATION a source location. NAME is a string."
        (mapcan (lambda(p) (prepare-part p istate)) (cdr part)))
       (cons (dcase part
               ((:newline) (list newline))
-              ((:value obj &optional str) 
-               (list (value-part obj str (istate.parts istate))))
-              ((:styled-value style obj &optional str) 
+              ((:value obj &optional str &key style) 
                (list (value-part obj str (istate.parts istate) style)))
+;              ((:styled-value style obj &optional str) 
+;               (list (value-part obj str (istate.parts istate) style)))
               ((:label &rest strs)
-               (list (list :label (apply #'cat (mapcar #'string strs)))))
-              ((:action label lambda &key (refreshp t)) 
+               (let ((style (and (eq (car strs) :style) (progn (pop strs) (pop strs))))) 
+                 (list (list* :label (apply #'cat (mapcar #'string strs))
+                              (and style `(:style ,style))))))
+              ((:action label lambda &key (refreshp t) style) 
                (list (action-part label lambda refreshp
-                                  (istate.actions istate))))
+                                  (istate.actions istate) style)))
               ((:line label value)
                (list `(:label ,(princ-to-string label)) ": "
                      (value-part value nil (istate.parts istate))
                      newline)))))))
 
 (defun value-part (object string parts &optional style)
-  `(,@(if style `(:styled-value ,style)  '(:value))
+  `(:value
     ,(or string (print-part-to-string object))
-    ,(assign-index object parts)))
+    ,(assign-index object parts)
+    ,@(if style `(:style ,style))))
 
-(defun action-part (label lambda refreshp actions)
-  (list :action label (assign-index (list lambda refreshp) actions)))
+(defun action-part (label lambda refreshp actions style)
+  (list* :action label (assign-index (list lambda refreshp) actions)
+         (if style `(:style ,style))
+         ))
 
 (defun assign-index (object vector)
   (let ((index (fill-pointer vector)))

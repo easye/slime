@@ -141,12 +141,9 @@ CONTRIBS is a list of contrib packages to load. If `nil', use
 (defvar slime-protocol-version nil)
 (setq slime-protocol-version slime-version)
 
-(defvar slime-value-faces '(:blue 
-                            (t (:inherit slime-inspector-label-face :foreground "blue"))
-                            :dim
-                            (t (:inherit slime-inspector-label-face :foreground "grey")))
-  "A plist whose values are a faces and keys able to be used in (:styled-value <key> <value> <label>) parts
-e.g. '(:blue (t (:inherit slime-inspector-label-face :foreground \"blue\")))")
+(defvar slime-custom-inspector-faces nil
+  "An alist whose values are a faces and keys able to be used as style arguments to :value :line :action
+e.g. '((:blue  (:foreground \"blue\"))). Use (slime-possibly-custom-style style face), which will inherit from face")
 
 
 ;;;; Customize groups
@@ -6496,26 +6493,27 @@ If PREV resp. NEXT are true insert more-buttons as needed."
     (when (and next (< end len))
       (slime-inspector-insert-more-button end nil))))
 
+(defun slime-possibly-custom-style (style face)
+  (append `(:inherit ,face) (second (assoc style slime-custom-inspector-faces))))
+
+;; 2022-02-17 alanr add styles
 (defun slime-inspector-insert-ispec (ispec)
   (if (stringp ispec)
       (insert ispec)
     (slime-dcase ispec
-      ((:value string id)
+      ((:value string id &key style) 
        (slime-propertize-region
            (list 'slime-part-number id
                  'mouse-face 'highlight
-                 'face 'slime-inspector-value-face)
+                 'face (slime-possibly-custom-style style 'slime-inspector-value-face))
          (insert string)))
-      ((:styled-value style  string id )
-       (let ((face (or (getf slime-value-faces style) 'slime-inspector-value-face)))
-         (slime-insert-propertized `(slime-part-number ,id mouse-face highlight face ,face)
-           string)))
-      ((:label string)
-       (insert (slime-inspector-fontify label string)))
-      ((:action string id)
+      ((:label string &key style)
+       (insert 
+        (slime-add-face (slime-possibly-custom-style style 'slime-inspector-label-face) string)))
+      ((:action string id &key style)
        (slime-insert-propertized (list 'slime-action-number id
                                        'mouse-face 'highlight
-                                       'face 'slime-inspector-action-face)
+                                       'face (slime-possibly-custom-style style 'slime-inspector-action-face))
                                  string)))))
 
 (defun slime-inspector-position ()
