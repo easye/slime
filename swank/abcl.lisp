@@ -545,11 +545,13 @@
    values))
 
 ;; Switch to enable or disable locals functionality
+#+abcl-introspect
 (defvar *enable-locals* t)
 
+#+abcl-introspect 
 (defun are-there-locals? (frame index)
   (and *enable-locals*
-       (fboundp 'sys::find-locals)
+       (fboundp 'abcl-introspect/sys::find-locals)
        (typep frame 'sys::lisp-stack-frame)
        (let ((operator (jss::get-java-field (nth-frame index) "operator" t)))
          (and (function-lambda-expression (if (functionp operator) operator (symbol-function operator)))
@@ -558,11 +560,12 @@
                   (not (eq (symbol-package operator) (find-package 'cl)))
                   t)))))
 
+#+abcl-introspect
 (defimplementation frame-locals (index)
   (let ((frame (nth-frame index)))         ;;(id -1)
     ;; FIXME introspect locals in SYS::JAVA-STACK-FRAME
     (or (and (are-there-locals? frame index)
-             (let ((locals (sys::find-locals index (backtrace 0 (1+ index)))))
+             (let ((locals (abcl-intospect/sys::find-locals index (backtrace 0 (1+ index)))))
                (let ((argcount (length (cdr (nth-frame-list index))))
                      (them 
                        (let ((operator (jss::get-java-field (nth-frame index) "operator" t)))
@@ -600,9 +603,10 @@
                        :id 0 ;; FIXME how is id supposed to be used
                        :value value)))))
 
+#+abcl-introspect
 (defimplementation frame-var-value (index id)
   (if (are-there-locals? (nth-frame index) index)
-      (third (nth id (reverse (remove :lexical-variable (caar (sys::find-locals index (backtrace 0 (1+ index)))) :test-not 'eq :key 'car))))
+      (third (nth id (reverse (remove :lexical-variable (caar (abcl-introspect/sys::find-locals index (backtrace 0 (1+ index)))) :test-not 'eq :key 'car))))
       (elt (rest (jcall "toLispList" (nth-frame index))) id)))
 
 #+abcl-introspect
