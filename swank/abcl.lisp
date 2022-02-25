@@ -552,23 +552,22 @@
        (fboundp 'sys::find-locals)
        (typep frame 'sys::lisp-stack-frame)
        (let ((operator (jss::get-java-field (nth-frame index) "operator" t)))
-         (and  (function-lambda-expression (if (functionp operator) operator (symbol-function operator)))
-               (not (member operator '(java::jcall java::jcall-static))) ;; WTF, length is an interpreted function??
-               (if (symbolp operator)
-                   (not (eq (symbol-package operator) (find-package 'cl)))
-                   t)))))
+         (and (function-lambda-expression (if (functionp operator) operator (symbol-function operator)))
+              (not (member operator '(java::jcall java::jcall-static))) ;; WTF, length is an interpreted function??
+              (if (symbolp operator)
+                  (not (eq (symbol-package operator) (find-package 'cl)))
+                  t)))))
 
 (defimplementation frame-locals (index)
-  (let ((frame (nth-frame index))
-        ;;(id -1)
-        )
+  (let ((frame (nth-frame index)))         ;;(id -1)
     ;; FIXME introspect locals in SYS::JAVA-STACK-FRAME
     (or (and (are-there-locals? frame index)
              (let ((locals (sys::find-locals index (backtrace 0 (1+ index)))))
                (let ((argcount (length (cdr (nth-frame-list index))))
                      (them 
                        (let ((operator (jss::get-java-field (nth-frame index) "operator" t)))
-                         (let* ((env (and (jss::jtypep operator 'lisp.closure) (jss::get-java-field operator "environment" t)))
+                         (let* ((env (and (jss::jtypep operator 'lisp.closure)
+                                          (jss::get-java-field operator "environment" t)))
                                 (closed-count (if env (length (sys::environment-parts env)) 0)))
                            (declare (ignore closed-count))
                                         ; FIXME closed-over are in parts but also in locals
@@ -582,25 +581,24 @@
                                                  :value value))))))
                  (declare (ignore argcount))
                  (reverse them))))
-    ;; locals not available, fallback to original
-    (loop
-      :with frame = (nth-frame-list index)
-      :with operator = (first frame)
-      :with values = (rest frame)
-      :with arglist = (if (and operator (consp values) (not (null values)))
-                          (handler-case (match-lambda operator values)
-                            (jvm::lambda-list-mismatch (e) (declare(ignore e))
-                              :lambda-list-mismatch))
-                          :not-available)
-      :for value :in values
-      for id from 0
-      :collecting (list 
-                   :name (if (not (keywordp arglist)) ;; FIXME: WHat does this do?
-                             (format nil "arg-~a" (first (nth id arglist)))
-                             (format nil "arg~A" id))
-                   :id 0 ;; FIXME how is id supposed to be used
-                   :value value))
-    )))
+        ;; locals not available, fallback to original
+        (loop
+          :with frame = (nth-frame-list index)
+          :with operator = (first frame)
+          :with values = (rest frame)
+          :with arglist = (if (and operator (consp values) (not (null values)))
+                              (handler-case (match-lambda operator values)
+                                (jvm::lambda-list-mismatch (e) (declare(ignore e))
+                                  :lambda-list-mismatch))
+                              :not-available)
+          :for value :in values
+          for id from 0
+          :collecting (list 
+                       :name (if (not (keywordp arglist)) ;; FIXME: WHat does this do?
+                                 (format nil "arg-~a" (first (nth id arglist)))
+                                 (format nil "arg~A" id))
+                       :id 0 ;; FIXME how is id supposed to be used
+                       :value value)))))
 
 (defimplementation frame-var-value (index id)
   (if (are-there-locals? (nth-frame index) index)
