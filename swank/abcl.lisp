@@ -604,6 +604,10 @@
                        :value value)))))
 
 #+abcl-introspect
+(defimplementation frame-catch-tags (index)
+  (mapcar 'second (remove :catch (caar (abcl-intospect/sys::find-locals index (backtrace 0 (1+ index)))) :test-not 'eq :key 'car)))
+
+#+abcl-introspect
 (defimplementation frame-var-value (index id)
   (if (are-there-locals? (nth-frame index) index)
       (third (nth id (reverse (remove :lexical-variable (caar (abcl-introspect/sys::find-locals index (backtrace 0 (1+ index)))) :test-not 'eq :key 'car))))
