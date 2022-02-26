@@ -603,6 +603,9 @@
                    :value value))
     )))
 
+(defimplementation frame-catch-tags (index)
+  (mapcar 'second (remove :catch (caar (sys::find-locals index (backtrace 0 (1+ index)))) :test-not 'eq :key 'car)))
+
 (defimplementation frame-var-value (index id)
   (if (are-there-locals? (nth-frame index) index)
       (third (nth id (reverse (remove :lexical-variable (caar (sys::find-locals index (backtrace 0 (1+ index)))) :test-not 'eq :key 'car))))
