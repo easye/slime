@@ -1089,6 +1089,13 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
                    (if (and (consp found) (eq (car found) :file) (probe-file (second found)))
                        found))))))))
 
+;; If we're looking for an accessor, have the snippet for the classa
+(defun snippet-for (what)
+  (if (and (consp what) (member (car what) '(:slot-reader :slot-writer)))
+      (format nil "defclass ~a" (third what))
+      (string-downcase (format nil "~a ~a" (first (definition-specifier what))
+                           (second (definition-specifier what))))))
+
 (defun slime-location-from-source-annotation (sym it)
   (destructuring-bind (what path pos) it
     (let* ((isfunction
@@ -1124,8 +1131,7 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
                                      (:buffer ,(subseq path2  (load-time-value (length "emacs-buffer:"))))
                                      ;; really should search from bottom up, but fix that another time
                                      (:line 0)
-                                     (:snippet ,(string-downcase (format nil "~a ~a" (first (definition-specifier what))
-                                                                         (second (definition-specifier what)))))
+                                     (:snippet ,(snippet-for what))
                                      )
                                    `(:location
                                      (:file ,path2)
