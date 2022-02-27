@@ -615,7 +615,8 @@
 
 #+abcl-introspect
 (defimplementation frame-catch-tags (index)
-  (mapcar 'second (remove :catch (caar (abcl-intospect/sys::find-locals index (backtrace 0 (1+ index)))) :test-not 'eq :key 'car)))
+  (mapcar 'second (remove :catch (caar (abcl-intospect/sys:find-locals index (backtrace 0 (1+ index))))
+                          :test-not 'eq :key 'car)))
 
 #+abcl-introspect
 (defimplementation frame-var-value (index id)
