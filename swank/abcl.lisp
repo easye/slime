@@ -1359,8 +1359,7 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
                              ,(documentation f t) (:newline)))
       ,@(when (function-lambda-expression f)
           `((:label "Lambda expression:")
-            (:newline) ,(princ-to-string
-                         (function-lambda-expression f)) (:newline)))
+             (:value ,(function-lambda-expression f)) (:newline)))
       (:label "Function java class: ") (:value ,(jcall "getClass" f)) (:newline)
       #+abcl-introspect
       ,@(when (jcall "isInstance"  (java::jclass "org.armedbear.lisp.CompiledClosure") f)
