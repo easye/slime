@@ -34,3 +34,5 @@ doc/*.pgs
 doc/*.vrs
 doc/*.tgz
 /dist/
+.showbranch
+.cd-reminder
