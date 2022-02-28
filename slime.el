@@ -6153,15 +6153,15 @@ was called originally."
 
 (defun slime-update-threads-buffer ()
   (interactive)
-  (when (null 
-         (ignore-errors ;; if we lose connection the thread update was still running
-           (with-current-buffer slime-threads-buffer-name
-             (slime-eval-async '(swank:list-threads)
-               'slime-display-threads)))
-         (when  (not (buffer-live-p slime-threads-buffer-timer ))
-           (cancel-timer slime-threads-buffer-timer)
-           (message "Error in slime-update-threads-buffer. Canceling update timer")
-           (setq slime-threads-buffer-timer nil)))))
+  (when (or (null 
+             (ignore-errors ;; if we lose connection the thread update was still running
+               (with-current-buffer slime-threads-buffer-name
+                 (slime-eval-async '(swank:list-threads)
+                   'slime-display-threads))))
+              (not (buffer-live-p slime-threads-buffer-timer )))
+      (cancel-timer slime-threads-buffer-timer)
+      (message "Error in slime-update-threads-buffer. Canceling update timer")
+      (setq slime-threads-buffer-timer nil)))
 
 (defun slime-move-point (position)
   "Move point in the current buffer and in the window the buffer is displayed."
