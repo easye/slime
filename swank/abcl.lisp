@@ -604,7 +604,8 @@
     )))
 
 (defimplementation frame-catch-tags (index)
-  (mapcar 'second (remove :catch (caar (sys::find-locals index (backtrace 0 (1+ index)))) :test-not 'eq :key 'car)))
+  (when (are-there-locals? (nth-frame index) index)
+    (mapcar 'second (remove :catch (caar (sys::find-locals index (backtrace 0 (1+ index)))) :test-not 'eq :key 'car))))
 
 (defimplementation frame-var-value (index id)
   (if (are-there-locals? (nth-frame index) index)
@@ -1026,7 +1027,7 @@
                                        ;; pos never seems right. Use function name.
                                        (:line 0)
                                        (:snippet ,snippet)))))
-                     `((:system ,symbol) (:location (:file ,source) (:line 0) (:snippet ,snippet))))))
+                     ((:system ,symbol) (:location (:file ,source) (:line 0) (:snippet ,snippet))))))
             (ecase *when-in-file-system-and-jar-choose* 
               (:both choices)
               (:filesystem (list (first choices)))
@@ -1265,8 +1266,9 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
    #+abcl-introspect ;; ??? This doesn't appear depend on ABCL-INTROSPECT.  Why disable?
    `(:action "[Edit in emacs buffer]" ,(lambda() (swank::ed-in-emacs `(:string ,string))))
    '(:newline)
-   (if (ignore-errors (jclass string))
-       `(:line "Names java class" ,(jclass string))
+   #+abcl-introspect
+   (if (ignore-errors (jss::find-java-class string))
+       `(:line "Names java class" ,(jss::find-java-class string))
        "")
    #+abcl-introspect
    (if (and (jss-p)  (< (length string) 100)
@@ -1777,7 +1779,7 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
 
 (defstruct mailbox
   (queue '()))
-
+  
 (defun mailbox (thread)
   "Return THREAD's mailbox."
   (threads:synchronized-on *thread-plists*
