@@ -67,8 +67,12 @@
 ;;; Since Swank may also be run in a server not running under Emacs
 ;;; and potentially with other REPLs, we export a functional toggle
 ;;; for the user to call after loading these definitions.
+;;; alanr: Add an extra argument when if nil doesn't return argument
 (defun enable-cl-inspect-in-emacs ()
-  (swank::wrap 'cl:inspect :use-slime :replace 'swank::inspect-in-emacs))
+  (swank::wrap 'cl:inspect :use-slime :replace 
+               #'(lambda(what &optional (return-values t))
+                   (let ((res (swank::inspect-in-emacs what)))
+                     (if return-values res (values))))))
 
 ;; ??? repair bare print object so inspector titles show java class
 (defun %print-unreadable-object-java-too (object stream type identity body)
