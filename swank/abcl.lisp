@@ -1515,7 +1515,7 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
                                              (jcall "toString" this)
                                              0 
                                              (1+ (position #\. (jcall "toString" this)  :from-end t)))
-                             regex "$1")
+                             (#"quote" 'regex.pattern regex) "$1")
             collect "  "
             collect (list :value this pre)
             collect (list :value this (jcall "getName" this) :style  :java-name )
@@ -1541,7 +1541,7 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
             for paren =  (position #\( desc)
             for dot = (position #\. (subseq desc 0 paren) :from-end t)
             ;; If it's a method on this class, then just show the method name
-            for pre = (jcall "replaceFirst"  (subseq desc 0 (1+ dot)) class-prefix "")
+            for pre = (jcall "replaceFirst"  (subseq desc 0 (1+ dot)) (#"quote" 'regex.pattern class-prefix) "")
             for name = (subseq desc (1+ dot) paren)
             for after = (subseq desc paren)
             collect "  "
