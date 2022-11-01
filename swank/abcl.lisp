@@ -686,9 +686,11 @@
 
 (defimplementation swank-compile-string (string &key buffer position filename
                                                 line column policy)
-  (declare (ignore filename line column policy))
+  (declare (ignore line column policy))
   (let ((jvm::*resignal-compiler-warnings* t)
-        (*abcl-signaled-conditions* nil))
+        (*abcl-signaled-conditions* nil)
+        (*compile-file-truename* (ignore-errors (truename filename)))
+        (*compile-file-pathname filename))
     (handler-bind ((warning #'handle-compiler-warning))
       (let ((*buffer-name* buffer)
             (*buffer-start-position* position)
@@ -1239,7 +1241,8 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
           
 ;;****************
 
-(defmethod emacs-inspect ((o t))
+;; 2022-11-01 alanr factor out so it can be called directly. Workaround for java-implemented stream structure classes
+(defun emacs-inspect-inspected-parts (o)
   (let* ((type (type-of o))
          (class (ignore-errors (find-class type)))
          (jclass (and (typep  class 'sys::built-in-class)
@@ -1263,6 +1266,9 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
                     '(:newline)
                     (emacs-inspect-java-object o)
                     ))))))
+
+(defmethod emacs-inspect ((o t))
+  (emacs-inspect-inspected-parts o))
 
 (defmethod emacs-inspect ((string string))
   (swank::lcons* 
@@ -1405,7 +1411,7 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
                 '(:newline)))))
 
 (defun maybe-with-prefixed-symbol (thing)
-  (if (symbolp thing)
+  (if (and (symbolp thing) (symbol-package thing)) ;; 2022-11-01 alanr handle gensyms = no package
       (let ((*print-case* :downcase))
         (if (eq (symbol-package thing) *package*)
             (princ-to-string thing)
@@ -1625,27 +1631,28 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
 (defmethod emacs-inspect ((object sys::structure-class))
   (let* ((name (jss::get-java-field object "name" t))
          (def (get name  'system::structure-definition)))
-  `((:label "Class: ") (:value ,object) (:newline)
-    (:label "Raw defstruct definition: ") (:value ,def  ,(let ((*print-array* nil)) (prin1-to-string def))) (:newline)
-   ,@(parts-for-structure-def  name)
-    ;; copy-paste from swank fancy inspector
-    ,@(when (swank-mop:specializer-direct-methods object)
-        `((:label "It is used as a direct specializer in the following methods:")
-          (:newline)
-          ,@(loop
-              for method in (specializer-direct-methods object)
-              for method-spec = (swank::method-for-inspect-value method)
-              collect "  "
-              collect `(:value ,method ,(string-downcase (string (car method-spec))))
-              collect `(:value ,method ,(format nil " (~{~a~^ ~})" (cdr method-spec)))
-              append (let ((method method))
-                       `(" " (:action "[remove]"
-                                      ,(lambda () (remove-method (swank-mop::method-generic-function method) method)))))
-              collect '(:newline)
-              if (documentation method t)
-                collect "    Documentation: " and
-              collect (swank::abbrev-doc  (documentation method t)) and
-              collect '(:newline)))))))
+    `((:label "Class: ") (:value ,object) (:newline)
+      (:label "Raw defstruct definition: ") (:value ,def  ,(let ((*print-array* nil)) (prin1-to-string def))) (:newline)
+      ,@(if (null def) (emacs-inspect-inspected-parts object))
+      ,@(unless (null def) (parts-for-structure-def  name))
+      ;; copy-paste from swank fancy inspector
+      ,@(when (swank-mop:specializer-direct-methods object)
+          `((:label "It is used as a direct specializer in the following methods:")
+            (:newline)
+            ,@(loop
+                for method in (specializer-direct-methods object)
+                for method-spec = (swank::method-for-inspect-value method)
+                collect "  "
+                collect `(:value ,method ,(string-downcase (string (car method-spec))))
+                collect `(:value ,method ,(format nil " (~{~a~^ ~})" (cdr method-spec)))
+                append (let ((method method))
+                         `(" " (:action "[remove]"
+                                        ,(lambda () (remove-method (swank-mop::method-generic-function method) method)))))
+                collect '(:newline)
+                if (documentation method t)
+                  collect "    Documentation: " and
+                collect (swank::abbrev-doc  (documentation method t)) and
+                collect '(:newline)))))))
 
 (defun parts-for-structure-def-slot (def)
   `((:label ,(string-downcase (sys::dsd-name def))) " reader: " (:value ,(sys::dsd-reader def) ,(string-downcase (string (sys::dsd-reader def))))
