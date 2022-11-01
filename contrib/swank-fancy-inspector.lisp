@@ -25,6 +25,10 @@
       (declare (ignore _symbol))
       (append
         (label-value-line "Its name is" (symbol-name symbol))
+        #+abcl-introspect
+        (let ((it nil))
+          (if (ignore-errors (setq it (jss::find-java-class (string symbol))))
+              `((:label "Names java class: ") (:value ,it ,(jss::jclass-name it)) (:newline))))
         ;;
         ;; Value
         (cond ((boundp symbol)
