@@ -557,11 +557,12 @@
        (fboundp 'sys::find-locals)
        (typep frame 'sys::lisp-stack-frame)
        (let ((operator (jss::get-java-field (nth-frame index) "operator" t)))
-         (and  (function-lambda-expression (if (functionp operator) operator (symbol-function operator)))
-               (not (member operator '(java::jcall java::jcall-static))) ;; WTF, length is an interpreted function??
-               (if (symbolp operator)
-                   (not (eq (symbol-package operator) (find-package 'cl)))
-                   t)))))
+         (or (mop::std-generic-function-p operator)
+             (and  (function-lambda-expression (if (functionp operator) operator (symbol-function operator)))
+                   (not (member operator '(java::jcall java::jcall-static))) ;; WTF, length is an interpreted function??
+                   (if (symbolp operator)
+                       (not (eq (symbol-package operator) (find-package 'cl)))
+                       t))))))
 
 (defimplementation frame-locals (index)
   (let ((frame (nth-frame index))
@@ -579,10 +580,17 @@
                                         ; FIXME closed-over are in parts but also in locals
                                         ; FIXME closed-over are in compiled functions to but are value of internal field
                                         ; environment is the enviromnet of 
-                           (loop for (kind symbol value) in (caar locals)
+                           (loop for previous-symbol = nil then symbol
+                                 for ((kind symbol value) next) on (caar locals)
+
                                  when (eq kind :lexical-variable)
                                         ; FIXME should I qualify each by whether arg, closed-over, let-bound?
-                                   collect (list :name symbol 
+                                   unless
+                                     ;; If the lexical immediately before or after lexical mop::next-emfun are internal to mop so don't display
+                                   (or (member (second next) '(mop::args mop::next-emfun))
+                                       (member previous-symbol '(mop::args mop::next-emfun))
+                                       )
+                                     collect (list :name symbol 
                                                  :id 0        
                                                  :value value))))))
                  (declare (ignore argcount))
