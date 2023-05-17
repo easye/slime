@@ -53,6 +53,7 @@
 ;; architecture for booting streams allows us to replace the Java-side
 ;; implementation of a Slime{Input,Output}Stream.java classes are
 ;; subsumed <http://abcl.org/trac/ticket/373>.
+#+nil
 (progn
   (defimplementation make-output-stream (write-string)
     (ext:make-slime-output-stream write-string))
