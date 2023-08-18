@@ -467,6 +467,35 @@
     (funcall debugger-loop-fn)))
 
 (defun backtrace (start end)
+  (unless
+      (flet ((print-frame-call-place (start end)
+               (handler-case
+                   (if (typep frame 'sys::lisp-stack-frame)
+                       (first (sys::frame-to-list frame))
+                       (sys::frame-to-string frame))
+                 (error (c)))))
+        (loop for frame in (compute-backtrace start end)
+              for i from start collect
+                               (list i (frame-to-string frame)
+                                     (format NIL "~A" (print-frame-call-place frame))
+                                     (handler-case
+                                         (frame-source-location i)
+                                       (error (c) (format t "Error: ~A~%" c)
+                                         NIL))
+                                     NIL)))
+    (%backtrace start end)))
+
+  (defun print-frame-call-place (frame)
+      (handler-case
+          (if (typep frame 'sys::lisp-stack-frame)
+              (first (sys::frame-to-list frame))
+              (sys::frame-to-string frame))
+        (error (c)
+          (format t "Error: ~A~%" c))))
+
+  
+
+(defun %backtrace (start end)
   "A backtrace without initial SWANK frames."
   (let ((backtrace
           #+abcl-introspect sys::*saved-backtrace*

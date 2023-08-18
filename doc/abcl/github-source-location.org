@@ -1,0 +1,27 @@
+#+caption: <https://github.com/slime/slime/issues/752#issuecomment-1418171655>
+#+begin_src lisp
+  (use-package :swank)
+
+  (defslimefun backtrace (start end)
+    (loop for frame in (compute-backtrace start end)
+          for i from start collect
+          (list i (frame-to-string frame)
+                  (format NIL "~A" (print-frame-call-place frame))
+                  (handler-case
+                      (frame-source-location i)
+                    (error (c) (format t "Error: ~A~%" c)
+                               NIL))
+                  NIL)))
+
+
+  (defun print-frame-call-place (frame)
+      (handler-case
+          (if (typep frame 'sys::lisp-stack-frame)
+              (first (sys::frame-to-list frame))
+              (sys::frame-to-string frame))
+        (error (c)
+          (format t "Error: ~A~%" c))))
+
+
+  (defun mobz () (error "Wut"))
+#+end_src
