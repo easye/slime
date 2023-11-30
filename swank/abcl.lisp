@@ -272,7 +272,8 @@
          (octets (make-array len :element-type '(unsigned-byte 8))))
     (loop for i from 0 below len
           for jbyte = (java:jarray-ref jbytes i)
-          do (setf (aref octets i) jbyte))
+          do (setf (aref octets i)
+                   (logand jbyte #xff)))
     octets))
 
 ;;;; External formats
