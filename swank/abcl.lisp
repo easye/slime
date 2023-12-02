@@ -1437,31 +1437,40 @@
   (let ((has-superclasses (jclass-superclass class))
         (has-interfaces (plusp (length (jclass-interfaces class))))
         (fields (inspector-java-fields class))
-        (path (jcall "replaceFirst"
-                     (jcall "replaceFirst"  
-                            (jcall "toString" (jcall "getResource" 
-                                                     class
-                                                     (concatenate 'string
-                                                                  "/" (substitute #\/ #\. (jcall "getName" class))
-                                                                  ".class")))
-                            "jar:file:" "") "!.*" "")))
+        (path
+          (ignore-errors ;; TODO: make this intelligble
+           (jcall "replaceFirst"
+                  (jcall "replaceFirst"  
+                         (jcall "toString"
+                                (jcall "getResource" 
+                                       class
+                                       (concatenate 'string
+                                                    "/" (substitute #\/ #\. (jcall "getName" class))
+                                                    ".class")))
+                         "jar:file:" "") "!.*" ""))))
     `((:label ,(format nil "Java Class: ~a" (jcall "getName" class) ))
       (:newline)
       ,@(when path (list `(:label ,"Loaded from: ")
                          `(:value ,path)
                          " "
                          `(:action "[open in emacs buffer]" ,(lambda() (swank::ed-in-emacs `( ,path)))) '(:newline)))
-      ,@(if has-superclasses 
-            (list* '(:label "Superclasses: ") (butlast (loop for super = (jclass-superclass class) then (jclass-superclass super)
-                                                             while super collect (list :value super (jcall "getName" super)) collect ", "))))
-      ,@(if has-interfaces
-            (list* '(:newline) '(:label "Implements Interfaces: ")
-                   (butlast (loop for i across (jclass-interfaces class) collect (list :value i (jcall "getName" i)) collect ", "))))
+      ,@(when has-superclasses 
+          (list* '(:label "Superclasses: ")
+                 (butlast (loop for super = (jclass-superclass class)
+                                  then (jclass-superclass super)
+                                while super
+                                collect (list :value super (jcall "getName" super))
+                                collect ", "))))
+      ,@(when has-interfaces
+          (list* '(:newline) '(:label "Implements Interfaces: ")
+                 (butlast (loop for i across (jclass-interfaces class) collect (list :value i (jcall "getName" i)) collect ", "))))
       (:newline) (:label "Methods:") (:newline)
       ,@(inspector-java-methods class)
-      ,@(if fields
-            (list*
-             '(:newline) '(:label "Fields:") '(:newline)
+      ,@(when fields
+          (list*
+           '(:newline)
+           '(:label "Fields:")
+           '(:newline)
              fields)))))
 
 (defmethod emacs-inspect ((object sys::structure-object))
