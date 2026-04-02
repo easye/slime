@@ -1135,6 +1135,28 @@
 ;;; case, so make its computation a user interaction.
 (defparameter *to-string-hashtable* (make-hash-table :weakness :key))
 
+;; Always offer to inspect as java object 
+(defvar *inspect-as-java-object*)
+
+(defmethod emacs-inspect :around ((o t))
+  (maybe-setup-custom-styles)
+  (if (boundp '*inspect-as-java-object*)
+      (if (jinstance-of-p o (jclass "java.lang.Class"))
+          (emacs-inspect-java-class o)
+          (emacs-inspect-java-object o))
+      (let* ((usual (call-next-method))
+             (lcons? (typep usual 'swank::lcons))
+             (action `(:action "[Inspect as java object]" 
+                               ,(lambda()(let ((*inspect-as-java-object* t))
+                                           (inspect o)
+                                           nil)) :refreshp nil)))
+        (if (not (java-object-p o))
+            (if lcons?
+                (swank::lcons action
+                              (swank::lcons '(:newline) usual))
+                (cons action (cons '(:newline) usual)))
+            usual))))
+
 (defmethod emacs-inspect ((o t))
   (let* ((type (type-of o))
          (class (ignore-errors (find-class type)))
