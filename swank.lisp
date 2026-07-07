@@ -126,8 +126,12 @@ Backend code should treat the connection structure as opaque.")
 (defvar *after-init-hook* '()
   "Hook run after user init files are loaded.")
 
+(defvar *interactive-eval-hook* '()
+  "Hook to transform evaluated string before evaluation")
+
 (defvar *find-definitions-all-packages* nil
   "If t then find-definitions will be called even if there is no symbol in the current package")
+
 
 
 ;;;; Connections
@@ -451,7 +455,8 @@ corresponding values in the CDR of VALUE."
                     (lambda ()
                       ;; safely interrupt THREAD
                       (when (invoke-or-queue-interrupt function)
-                        (wake-thread thread)))))
+                        (wake-thread thread))))
+  )
 
 (defun invoke-or-queue-interrupt (function)
   (log-event "invoke-or-queue-interrupt: ~a~%" function)
@@ -1746,12 +1751,22 @@ Errors are trapped and invoke our debugger."
 (defmacro values-to-string (values)
   `(format-values-for-echo-area (multiple-value-list ,values)))
 
+(add-hook *interactive-eval-hook* 'maybe-setq-defvar)
+
+(defun maybe-setq-defvar (form)
+  (if (and (consp form) (eq (car form) 'defvar))
+      `(setq ,@(cdr form))
+      form))
+
 (defslimefun interactive-eval (string)
   (with-buffer-syntax ()
     (with-retry-restart (:msg "Retry SLIME interactive evaluation request.")
-      (let ((values (multiple-value-list (eval (from-string string)))))
-        (finish-output)
-        (format-values-for-echo-area values)))))
+      (let ((form (from-string string)))
+        (loop for hook in *interactive-eval-hook* do
+          (setq form (funcall hook form)))
+        (let ((values (multiple-value-list (eval form))))
+          (finish-output)
+          (format-values-for-echo-area values))))))
 
 (defslimefun eval-and-grab-output (string)
   (with-buffer-syntax ()
@@ -3260,8 +3275,13 @@ Return nil if there's no previous object."
 
 (defslimefun inspector-reinspect ()
   (let ((istate *istate*))
-    (setf (istate.content istate) (emacs-inspect/istate istate))
-    (istate>elisp istate)))
+    (with-bindings (if (istate.verbose istate)
+                       *inspector-verbose-printer-bindings*
+                       *inspector-printer-bindings*)
+
+      (setf (istate.content istate) (emacs-inspect/istate istate))
+      (istate>elisp istate)))
+  )
 
 (defslimefun inspector-toggle-verbose ()
   "Toggle verbosity of inspected object."
@@ -3424,7 +3444,8 @@ Return NIL if LIST is circular."
               (cond ((= i max) '())
                     (t (lcons (iline i (row-major-aref array i))
                               (k (1+ i) max))))))
-     (k 0 (array-total-size array)))))
+     ;; 2022-10-03 13:46:15 alanr. Uncaught exception if array-total-size is used on adjustable array but > current fill-pointer. Or just use (length ..)
+     (k 0 (if (array-has-fill-pointer-p array) (fill-pointer array) (1- (array-total-size array)))))))
 
 ;;;;; Chars
 

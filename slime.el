@@ -3827,9 +3827,10 @@ locations."
   (setq xrefs (slime-remove-duplicated-buffer-and-file-xref xrefs))
   (cl-mapcan #'slime-postprocess-xref xrefs))
 
+;(require 'cl-loop) alanr no longer required
 ;; if there's both a buffer for a file and the file as source, remove the :buffer 
 (defun slime-remove-duplicated-buffer-and-file-xref (xrefs)
-  (loop for xref in xrefs
+  (cl-loop for xref in xrefs
         for (name (nil (kind where))) = xref
         unless (and (eq kind :buffer)
                     (let ((filename (buffer-file-name (get-buffer where))))
@@ -6137,6 +6138,7 @@ was called originally."
       (slime-update-threads-buffer)
       (goto-char (point-min))
       (when slime-threads-update-interval
+        (message "time %s" slime-threads-buffer-timer)
         (when slime-threads-buffer-timer
           (cancel-timer slime-threads-buffer-timer))
         (setq slime-threads-buffer-timer
@@ -6158,10 +6160,11 @@ was called originally."
                (with-current-buffer slime-threads-buffer-name
                  (slime-eval-async '(swank:list-threads)
                    'slime-display-threads))))
-              (not (buffer-live-p slime-threads-buffer-timer )))
-      (cancel-timer slime-threads-buffer-timer)
-      (message "Error in slime-update-threads-buffer. Canceling update timer")
-      (setq slime-threads-buffer-timer nil)))
+            (not (buffer-live-p slime-threads-buffer-timer )))
+    (when slime-threads-buffer-timer
+      (cancel-timer slime-threads-buffer-timer))
+    (message "Error in slime-update-threads-buffer. Canceling update timer")
+    (setq slime-threads-buffer-timer nil)))
 
 (defun slime-move-point (position)
   "Move point in the current buffer and in the window the buffer is displayed."

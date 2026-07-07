@@ -1480,12 +1480,20 @@ to show both of them as locations (:both) just the filesystem (:filesystem) or j
                                        "Could not invoke toString(): ~A"
                                        e))))))
         (intended-class (cdr (assoc "intendedClass" (sys::inspected-parts object)
+                                    :test 'equal)))
+        ;; 2024-12-05 16:38:09 alanr
+        ;; Sometimes if private class instead of actual class name ..$internal, changes the $ to "."
+        ;; Don't really understand the intended vs actual class business, nor why the $ is changed to "."
+        ;; But compensate by using the actual class if we get an error finding intended class
+        (actual-class (cdr (assoc "Java class" (sys::inspected-parts object)
                                     :test 'equal))))
     `((:label "Class: ")
       (:value ,(jcall "getClass" object) ,(jcall "getName" (jcall "getClass" object) )) (:newline)
       ,@(if (and intended-class (not (equal intended-class (jcall "getName" (jcall "getClass" object)))))
             `((:label "Intended Class: ")
-              (:value ,(jclass intended-class) ,intended-class) (:newline)))
+              (:value ,(or (ignore-errors (jss::find-java-class intended-class))
+                           actual-class)
+                      ) (:newline)))
       ,@(if (or (gethash object *to-string-hashtable*) (not *slime-tostring-on-demand*))
             (label-value-line "toString()" (funcall to-string))
             `((:action "[compute toString()]" ,to-string) (:newline)))
