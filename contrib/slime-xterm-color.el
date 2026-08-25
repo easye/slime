@@ -11,24 +11,34 @@
 
 (require 'slime) ;; kinda obvious:  do we really need to declare in a contrib?
 (if (< emacs-major-version 29)
-    (require 'xterm-color) ;; need to explicitly install locally via
-                           ;; <https://github.com/atomontage/xterm-color/README.org>.
+    (require 'xterm-color) ;; need to explicitly install locally c.f.
+			   ;; <https://github.com/atomontage/xterm-color/README.org>.
   (use-package xterm-color :ensure t))
 
 (defun slime-xterm-color-init ()
   "Initialize xterm-color processing for SLIME output."
-  
-  (advice-add 'slime-repl-emit :filter-args
-              #'slime-xterm-color--colorize-output)
-  
-  (message "slime-xterm-color initialized"))
+  (let ((symbol 'slime-repl-emit)
+	(function #'slime-xterm-color--colorize-output))
+    (when (and
+	   (or
+	    (advice-add symbol :filter-args function)
+	    t) ;; no meaningful return value
+	   (advice-member-p function symbol))
+      (message "slime-xterm-color initialized"))))
 
 (defun slime-xterm-color-fini ()
   "Disable xterm-color processing for SLIME output."
-  (advice-remove 'slime-repl-emit
-                 #'slime-xterm-color--colorize-output)
-  
-  (message "slime-xterm-color disabled"))
+  (let* ((symbol 'slime-repl-emit)
+	 (function #'slime-xterm-color--colorize-output)
+	 (was-present-p
+	  (advice-member-p function symbol)))
+    (when (and
+	   (or 
+	    (advice-remove symbol function)
+	    t) ;; no meaningful return value
+	   (and was-present-p
+		(not (advice-member-p function symbol))))
+      (message "slime-xterm-color disabled"))))
 
 (defun slime-xterm-color--colorize-output (args)
   "Apply xterm-color to SLIME output before it's displayed."
